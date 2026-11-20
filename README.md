@@ -43,10 +43,12 @@ Where we are not ahead, the table says so. Two caveats:
 
 ## What runs where
 
-The auto-config sizes everything from VRAM and RAM. Some measured examples (AMD MI250, PCIe host link):
+The auto-config sizes everything from VRAM and RAM. Measured examples: one NVIDIA laptop, the rest on an AMD MI250
+(datacenter GPU, PCIe host link):
 
 | Model | VRAM + RAM | Variant picked | Decode speed |
 |---|---|---|---|
+| Qwen3-30B-A3B (laptop: GTX 1650 4 GB, 23 GB RAM) | 3.2 GB + 8.7 GB pinned | 2.57-bit | 5.7 tok/s |
 | Qwen3.6-35B-A3B | 8 GB + 32 GB | 4.5-bit (H4) | 4–6 tok/s |
 | Gemma-4-26B-A4B | 8 GB + 32 GB | H4 | 7 tok/s |
 | gpt-oss-120b | 16 GB + 32 GB | 2.57-bit | 9 tok/s |
@@ -55,7 +57,7 @@ The auto-config sizes everything from VRAM and RAM. Some measured examples (AMD 
 | GLM-5.3-Flash | 24 GB + 128 GB | 3.5-bit | 2.25 tok/s |
 | GLM-5.3 (744B) | 24 GB + 256 GB | 3.0-bit | 1.1 tok/s |
 
-Consumer-desktop numbers (RTX-class GPU) are not measured yet; they will replace this table.
+Desktop numbers (RTX-class GPU) are not measured yet; they will replace the MI250 rows.
 
 ## Install
 
