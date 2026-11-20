@@ -1,0 +1,126 @@
+{
+ "format": "raw little-endian float16, row-major [4096, 2] (LUT[state, 0], LUT[state, 1]), 16384 bytes",
+ "source": "track T4 (quant_methods/t4_tcq.py train_lut), agents/quality/t4/codebooks",
+ "luts": {
+  "tcq-L12-V2-b3-4.bin": {
+   "pattern": [
+    3,
+    4
+   ],
+   "bits_per_weight": 1.75,
+   "sha256": "be4266040c7869bf5c86e47726140b92c79edf0e94a9d357dc1007916d61ef3b",
+   "gaussian_mse": 0.101674,
+   "recipe": "train_lut(L=12, V=2, shifts=(3, 4), iters=10) (t4_tcq.py)",
+   "t4_file": "agents/quality/t4/codebooks/tcq-L12-V2-b3-4.pt",
+   "t4_file_sha256": "3a3a8fdbf1257e24351b127354237a72586b4f0f2e170df344d928fa3be84bd2"
+  },
+  "tcq-L12-V2-b4.bin": {
+   "pattern": [
+    4,
+    4
+   ],
+   "bits_per_weight": 2.0,
+   "sha256": "d93f6a8075b40573a3384e89fa8c7d57b7fb3321cba60cf20ac79f14757c1a90",
+   "gaussian_mse": 0.072929,
+   "recipe": "train_lut(L=12, V=2, shifts=(4,), iters=10) (t4_tcq.py)",
+   "t4_file": "agents/quality/t4/codebooks/tcq-L12-V2-b4.pt",
+   "t4_file_sha256": "0c3401396eeb1a876b29c3c33f4a06af935cb360c744655a4093e1e803ebc6b0"
+  },
+  "tcq-L12-V2-b4-5.bin": {
+   "pattern": [
+    4,
+    5
+   ],
+   "bits_per_weight": 2.25,
+   "sha256": "eb7c5dc5f49108dcd5ca08745db4b88c0ace5d18824972648354945417d3a681",
+   "gaussian_mse": 0.052701,
+   "recipe": "train_lut(L=12, V=2, shifts=(4, 5), iters=10) (t4_tcq.py)",
+   "t4_file": "agents/quality/t4/codebooks/tcq-L12-V2-b4-5.pt",
+   "t4_file_sha256": "978990cc9750574447f441c145de3f24aee0b2173cc7782f0389aeb1bdfb76c0"
+  },
+  "tcq-L12-V2-b5.bin": {
+   "pattern": [
+    5,
+    5
+   ],
+   "bits_per_weight": 2.5,
+   "sha256": "f2c63fd55faeec187dfa33154b6812f64e5befa7aa56a4eed5e3a4a62bed220c",
+   "gaussian_mse": 0.037755,
+   "recipe": "train_lut(L=12, V=2, shifts=(5,), iters=10) (t4_tcq.py)",
+   "t4_file": "agents/quality/t4/codebooks/tcq-L12-V2-b5.pt",
+   "t4_file_sha256": "00658783ca3ed62819f11a8fd1a6edb21ed70c7bbfbc64c36a1b88a38fe35d96"
+  },
+  "tcq-L12-V2-b5-6.bin": {
+   "pattern": [
+    5,
+    6
+   ],
+   "bits_per_weight": 2.75,
+   "sha256": "a9dd6524730cffa5372417eac6980fa7cc84f32be02e4aaec3d0ccd00013f966",
+   "gaussian_mse": 0.02745,
+   "recipe": "train_lut(L=12, V=2, shifts=(5, 6), iters=10) (t4_tcq.py)",
+   "t4_file": "agents/quality/t4/codebooks/tcq-L12-V2-b5-6.pt",
+   "t4_file_sha256": "88a0f5e670393f050299b972d9b7b320ec7bb23188ffc0e193a162a476f26d76"
+  },
+  "tcq-L12-V2-b6.bin": {
+   "pattern": [
+    6,
+    6
+   ],
+   "bits_per_weight": 3.0,
+   "sha256": "67b521ba8254a3f1389319c05eb54e2efda06a0eb85bbac62b6e49f847914ebd",
+   "gaussian_mse": 0.019692,
+   "recipe": "train_lut(L=12, V=2, shifts=(6,), iters=10) (t4_tcq.py)",
+   "t4_file": "agents/quality/t4/codebooks/tcq-L12-V2-b6.pt",
+   "t4_file_sha256": "2499d0c80c6a9215a344dff2b27339708fd0e46915f1a382518de176af18c90b"
+  },
+  "tcq-L12-V2-b6-7.bin": {
+   "pattern": [
+    6,
+    7
+   ],
+   "bits_per_weight": 3.25,
+   "sha256": "16d3ec5806bd334f75125f6189309b61ad386bb4192ee1ada8215faf9902b286",
+   "gaussian_mse": 0.014462,
+   "recipe": "train_lut(L=12, V=2, shifts=(6, 7), iters=10) (t4_tcq.py)",
+   "t4_file": "agents/quality/t4/codebooks/tcq-L12-V2-b6-7.pt",
+   "t4_file_sha256": "49cf995b491282c07e45c6d559888712cf861fff4b6055f30ce87621be142856"
+  },
+  "tcq-L12-V2-b7.bin": {
+   "pattern": [
+    7,
+    7
+   ],
+   "bits_per_weight": 3.5,
+   "sha256": "ae45f7418906c7a8dd10c1c60c55bc83e19eaf4a4ce0e2a3f36d2f948e30fbab",
+   "gaussian_mse": 0.010404,
+   "recipe": "train_lut(L=12, V=2, shifts=(7,), iters=10) (t4_tcq.py)",
+   "t4_file": "agents/quality/t4/codebooks/tcq-L12-V2-b7.pt",
+   "t4_file_sha256": "bce799314814827ca95b3d9972d414edb0d1c0883f00869e4b114dfd7cc591e0"
+  },
+  "tcq-L12-V2-b7-8.bin": {
+   "pattern": [
+    7,
+    8
+   ],
+   "bits_per_weight": 3.75,
+   "sha256": "d0d5e1824afad17a025e36613a2cd092cef05b5830e271a313c81948f19a7973",
+   "gaussian_mse": 0.007702,
+   "recipe": "train_lut(L=12, V=2, shifts=(7, 8), iters=10) (t4_tcq.py)",
+   "t4_file": "agents/quality/t4/codebooks/tcq-L12-V2-b7-8.pt",
+   "t4_file_sha256": "f5a2664e1561d91a5231e80a63ca9502aac80183804a52e689274fed8ad94ecd"
+  },
+  "tcq-L12-V2-b8.bin": {
+   "pattern": [
+    8,
+    8
+   ],
+   "bits_per_weight": 4.0,
+   "sha256": "18ddf1fafb85433eaef8b05e4122ec56d9c81ce5e6e140967bc37bd1dd6691a9",
+   "gaussian_mse": 0.005582,
+   "recipe": "train_lut(L=12, V=2, shifts=(8,), iters=10) (t4_tcq.py)",
+   "t4_file": "agents/quality/t4/codebooks/tcq-L12-V2-b8.pt",
+   "t4_file_sha256": "c20e0c06478cb76a008d19d7132c48b4f665c409e65c41f4cf53c7d0ecc62e14"
+  }
+ }
+}

@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moe-tiering"
+dynamic = ["version"]
+description = "Run big Mixture-of-Experts LLMs on one GPU plus system RAM: experts tiered across VRAM and RAM, 2-4.5-bit trellis quantization"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.6",
+    "transformers>=5.15",
+    "safetensors>=0.4",
+    "numpy",
+    "huggingface_hub",
+    "triton-windows>=3.2; platform_system == 'Windows'",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+]
+
+[project.optional-dependencies]
+# GLM-5.x, DeepSeek-V4.1 and the graph decode of some architectures need a newer transformers
+new-archs = ["transformers>=5.19"]
+
+[project.scripts]
+moe-tiering = "moe_tiering.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "moe_tiering.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["moe_tiering*"]
+
+[tool.setuptools.package-data]
+moe_tiering = ["data/**/*"]
