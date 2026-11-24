@@ -6,5 +6,5 @@ dist/
 models/
 stores/
 *.pt
-!behemoe/data/codebooks/*.pt
+!ramog/data/codebooks/*.pt
 .export-manifest.json

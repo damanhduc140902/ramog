@@ -1,2 +1,0 @@
-# raw fp16 LUTs: never convert line endings (sha256-checked at load by behemoe.tcq)
-*.bin binary

@@ -1,6 +1,6 @@
-"""Shared memory of the prefill GEMM (behemoe.kernels._gemm_body) on every GPU family the engine targets.
+"""Shared memory of the prefill GEMM (ramog.kernels._gemm_body) on every GPU family the engine targets.
 
-The autotuner benchmarks the configs behemoe.kernels.gemm_candidates() keeps for a call; a config that needs more
+The autotuner benchmarks the configs ramog.kernels.gemm_candidates() keeps for a call; a config that needs more
 shared memory than the GPU allows per block fails to launch (OutOfResources) and is timed as inf, so a call must
 always keep at least one config that fits. This test compiles every kept config of both prefill GEMMs (the VRAM
 pool, _moe_gemm, and the zero-copy host pool, _moe_gemm_host) for each target with Triton's own compiler (no GPU
@@ -77,7 +77,7 @@ def compile_shared(job):
     from triton.backends.compiler import GPUTarget
     from triton.compiler import ASTSource
 
-    from behemoe.kernels import _gemm_body
+    from ramog.kernels import _gemm_body
 
     const = {"BITS": bits, "GROUP": group, "FMT": 0 if fmt == "rtn" else 1, "MODE": mode, "BLOCK_M": bm,
              "BLOCK_N": bn, "BLOCK_K": bk, "DOT_F32": f32}
@@ -96,7 +96,7 @@ def compile_shared(job):
 
 
 def offline(specs: list[str], jobs: int, strict: set[str]) -> tuple[list, list]:
-    from behemoe.kernels import _gemm_configs, _gemm_host_configs, _gemm_smem, gemm_candidates
+    from ramog.kernels import _gemm_configs, _gemm_host_configs, _gemm_smem, gemm_candidates
 
     cfgs = {"vram": _gemm_configs(), "host": _gemm_host_configs()}
     plan = []  # (spec, kernel, layout, K, block_m, [configs kept])
@@ -152,8 +152,8 @@ def live(jobs_rows: list) -> list:
     memory of every variant Triton compiled at run time with the offline compile for this GPU's target."""
     import torch
 
-    from behemoe import kernels
-    from behemoe.store import BlobLayout
+    from ramog import kernels
+    from ramog.store import BlobLayout
 
     fails = []
     dev = torch.device("cuda")

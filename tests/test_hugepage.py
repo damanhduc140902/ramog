@@ -9,8 +9,8 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from behemoe.kernels import grouped_gemv  # noqa: E402
-from behemoe.quant import quantize  # noqa: E402
+from ramog.kernels import grouped_gemv  # noqa: E402
+from ramog.quant import quantize  # noqa: E402
 
 N, K, BITS, GROUP = 1536, 2048, 2, 64
 EXPERTS = 4096  # ~5.8 GB of 2-bit blobs, like a real model's cold store

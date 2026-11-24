@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="420" height="112" viewBox="0 0 420 112" role="img" aria-labelledby="t">
-<title id="t">behemoe</title>
+<title id="t">RAMOG: Run Any MoE On one GPU</title>
 <!-- hot experts in VRAM (top row), cold experts in RAM (lower rows) -->
 <rect x="6" y="14" width="22" height="22" rx="5" fill="#2a78d6" fill-opacity="1.0"/>
 <rect x="34" y="14" width="22" height="22" rx="5" fill="#2a78d6" fill-opacity="1.0"/>
@@ -13,5 +13,6 @@
 <rect x="34" y="76" width="22" height="22" rx="5" fill="#2a78d6" fill-opacity="0.18"/>
 <rect x="62" y="76" width="22" height="22" rx="5" fill="#2a78d6" fill-opacity="0.18"/>
 <rect x="90" y="76" width="22" height="22" rx="5" fill="#2a78d6" fill-opacity="0.18"/>
-<text x="136" y="76" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="66" font-weight="700" letter-spacing="-1.5" fill="#1f2328">behe<tspan fill="#2a78d6">moe</tspan></text>
+<text x="136" y="68" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="66" font-weight="700" letter-spacing="1" fill="#2a78d6">RAM<tspan fill="#1f2328">OG</tspan></text>
+<text x="139" y="97" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="500" letter-spacing="0.3" fill="#59636e"><tspan fill="#2a78d6" font-weight="800">R</tspan>un <tspan fill="#2a78d6" font-weight="800">A</tspan>ny <tspan fill="#2a78d6" font-weight="800">M</tspan>oE <tspan fill="#2a78d6" font-weight="800">O</tspan>n one <tspan fill="#2a78d6" font-weight="800">G</tspan>PU</text>
 </svg>

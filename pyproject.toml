@@ -3,7 +3,7 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "behemoe"
+name = "ramog"
 dynamic = ["version"]
 description = "Run big Mixture-of-Experts LLMs on one GPU plus system RAM: experts tiered across VRAM and RAM, 2-4.5-bit trellis quantization"
 readme = "README.md"
@@ -30,13 +30,13 @@ classifiers = [
 new-archs = ["transformers>=5.19"]
 
 [project.scripts]
-behemoe = "behemoe.cli:main"
+ramog = "ramog.cli:main"
 
 [tool.setuptools.dynamic]
-version = { attr = "behemoe.__version__" }
+version = { attr = "ramog.__version__" }
 
 [tool.setuptools.packages.find]
-include = ["behemoe*"]
+include = ["ramog*"]
 
 [tool.setuptools.package-data]
-behemoe = ["data/**/*"]
+ramog = ["data/**/*"]

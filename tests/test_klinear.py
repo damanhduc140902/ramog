@@ -1,4 +1,4 @@
-"""KLinear (behemoe/klinear.py): decode and prefill vs a float64 reference on the dequantized weight, CUDA-graph replay
+"""KLinear (ramog/klinear.py): decode and prefill vs a float64 reference on the dequantized weight, CUDA-graph replay
 vs eager, and (--bench) speed against today's dense QuantLinear (rtn 4-bit g64) and bf16 F.linear.
 
 Accuracy: y = KLinear.matmul_f32(x) (the float32 sums before the cast to x.dtype) against
@@ -30,8 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 
-from behemoe import kquant  # noqa: E402
-from behemoe.klinear import DECODE_MAX_TOKENS, KLinear  # noqa: E402
+from ramog import kquant  # noqa: E402
+from ramog.klinear import DECODE_MAX_TOKENS, KLinear  # noqa: E402
 
 TOL = 1e-6
 DECODE_T = (1, 2, 3, 4, 5, 7, 8)
@@ -92,7 +92,7 @@ def check_module(lin: KLinear, tag: str, gen, dev, bias=None, extra: bool = True
         fwd, cast = lin(x), y.to(x.dtype)
         r["forward_is_cast"] = bool(torch.equal(fwd, cast))
         if T == 1 and not r["forward_is_cast"] and x.dtype == torch.bfloat16:
-            # one bf16 token: forward() runs behemoe.gemv1's bf16-output kernel, matmul_f32 its float32-output twin;
+            # one bf16 token: forward() runs ramog.gemv1's bf16-output kernel, matmul_f32 its float32-output twin;
             # the two compiled kernels may round once differently: within one bf16 ulp counts as the cast
             ulp = (fwd.view(torch.int16).int() - cast.view(torch.int16).int()).abs().max().item()
             r["forward_ulp"] = ulp
@@ -195,7 +195,7 @@ def bench_one(fn, x, iters: int, graph: bool, dev):
 
 
 def bench(mods: dict, dev, gen) -> list:
-    from behemoe.qlinear import QuantLinear
+    from ramog.qlinear import QuantLinear
 
     rows = []
     for tag, lin in mods.items():
@@ -259,7 +259,7 @@ def main():
         # 2. Qwen3-30B dense-c modules (real when --packed)
         mods = {}
         if args.packed:
-            from behemoe.dense_recipe import PackedDense
+            from ramog.dense_recipe import PackedDense
 
             pd = PackedDense(args.packed)
             for tag, name in PACKED_NAMES.items():

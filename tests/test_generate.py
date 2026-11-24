@@ -1,4 +1,4 @@
-"""behemoe.generate.Generator on a tiny random Qwen3-MoE store (tests/test_tiny_engine.py's checkpoint and store):
+"""ramog.generate.Generator on a tiny random Qwen3-MoE store (tests/test_tiny_engine.py's checkpoint and store):
 any CUDA/ROCm GPU, Linux or Windows, no download.
 
 1. Greedy (temperature 0, no stop ids) == session.GreedyDecoder.generate, token for token, graph and eager mode.
@@ -22,10 +22,10 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from behemoe.build import build_converted  # noqa: E402
-from behemoe.convert import convert  # noqa: E402
-from behemoe.generate import Generator, pick  # noqa: E402
-from behemoe.session import GreedyDecoder  # noqa: E402
+from ramog.build import build_converted  # noqa: E402
+from ramog.convert import convert  # noqa: E402
+from ramog.generate import Generator, pick  # noqa: E402
+from ramog.session import GreedyDecoder  # noqa: E402
 from test_tiny_engine import write_checkpoint  # noqa: E402
 
 

@@ -7,8 +7,8 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from behemoe.kernels import grouped_gemv  # noqa: E402
-from behemoe.quant import dequantize, quantize  # noqa: E402
+from ramog.kernels import grouped_gemv  # noqa: E402
+from ramog.quant import dequantize, quantize  # noqa: E402
 
 
 def make_pool(n_slots, n, k, bits, group, device):

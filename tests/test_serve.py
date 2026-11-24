@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from behemoe import app, serve  # noqa: E402
+from ramog import app, serve  # noqa: E402
 
 
 class ByteTok:
