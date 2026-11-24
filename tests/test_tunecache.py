@@ -1,9 +1,9 @@
-"""moe_tiering.tunecache: autotuning choices saved to disk and loaded by the next process (any CUDA/ROCm GPU).
+"""behemoe.tunecache: autotuning choices saved to disk and loaded by the next process (any CUDA/ROCm GPU).
 
-Runs in a temporary MOE_TIERING_TUNE_DIR: a grouped GEMV launch is tuned (its benchmark runs), save() writes the
+Runs in a temporary BEHEMOE_TUNE_DIR: a grouped GEMV launch is tuned (its benchmark runs), save() writes the
 choice, the in-memory cache is cleared, load() restores the same configuration and the next launch runs without
 benchmarking; the result matches the tuned launch (up to split-K summation order); a different engine version
-uses another file; and MOE_TIERING_TUNE_CACHE=0 turns loading and saving off.
+uses another file; and BEHEMOE_TUNE_CACHE=0 turns loading and saving off.
 python tests/test_tunecache.py
 """
 
@@ -18,15 +18,15 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from moe_tiering import kernels, tunecache  # noqa: E402
-from moe_tiering.store import BlobLayout  # noqa: E402
+from behemoe import kernels, tunecache  # noqa: E402
+from behemoe.store import BlobLayout  # noqa: E402
 
 
 def main() -> int:
     fails = 0
     dev = torch.device("cuda")
     with tempfile.TemporaryDirectory() as d:
-        os.environ["MOE_TIERING_TUNE_DIR"] = d
+        os.environ["BEHEMOE_TUNE_DIR"] = d
         tuner = kernels._grouped_gemv
         calls = {"n": 0}
         bench = tuner._bench
@@ -74,13 +74,13 @@ def main() -> int:
         print(f"another engine version uses another file: {other != path}")
         fails += not other != path
 
-        os.environ["MOE_TIERING_TUNE_CACHE"] = "0"
+        os.environ["BEHEMOE_TUNE_CACHE"] = "0"
         off = (tunecache.load(dev), tunecache.save())
-        del os.environ["MOE_TIERING_TUNE_CACHE"]
-        print(f"MOE_TIERING_TUNE_CACHE=0: load/save {off}")
+        del os.environ["BEHEMOE_TUNE_CACHE"]
+        print(f"BEHEMOE_TUNE_CACHE=0: load/save {off}")
         fails += off != (0, 0)
         tuner._bench = bench
-        del os.environ["MOE_TIERING_TUNE_DIR"]
+        del os.environ["BEHEMOE_TUNE_DIR"]
     print("PASS" if fails == 0 else f"FAIL ({fails})")
     return 1 if fails else 0
 

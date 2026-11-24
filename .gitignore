@@ -6,5 +6,5 @@ dist/
 models/
 stores/
 *.pt
-!moe_tiering/data/codebooks/*.pt
+!behemoe/data/codebooks/*.pt
 .export-manifest.json

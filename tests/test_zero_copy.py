@@ -7,8 +7,8 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from moe_tiering.kernels import grouped_gemv  # noqa: E402
-from moe_tiering.quant import dequantize, quantize  # noqa: E402
+from behemoe.kernels import grouped_gemv  # noqa: E402
+from behemoe.quant import dequantize, quantize  # noqa: E402
 
 
 def main():

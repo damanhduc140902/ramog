@@ -1,11 +1,11 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-    <img alt="moe-tiering" src="assets/logo-light.svg" width="420">
+    <img alt="behemoe" src="assets/logo-light.svg" width="360">
   </picture>
 </p>
 
-<h3 align="center">Run big Mixture-of-Experts LLMs on one GPU plus system RAM</h3>
+<h3 align="center">Run behemoth Mixture-of-Experts LLMs on one GPU plus system RAM</h3>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
@@ -27,11 +27,11 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/speed-8gb-dark.svg">
-    <img alt="Decode speed with an 8 GB VRAM budget, tokens per second, moe-tiering 2.57-bit vs llama.cpp Q4_K_M: Qwen3-30B-A3B 63.7 vs 39.3, Qwen3.6-35B-A3B 42.7 vs 33.0, GLM-4.7-Flash 32.8 vs 26.8, Gemma-4-26B-A4B 40.8 vs 34.5" src="assets/speed-8gb-light.svg" width="800">
+    <img alt="Decode speed with an 8 GB VRAM budget, tokens per second, behemoe 2.57-bit vs llama.cpp Q4_K_M: Qwen3-30B-A3B 63.7 vs 39.3, Qwen3.6-35B-A3B 42.7 vs 33.0, GLM-4.7-Flash 32.8 vs 26.8, Gemma-4-26B-A4B 40.8 vs 34.5" src="assets/speed-8gb-light.svg" width="800">
   </picture>
 </p>
 
-moe-tiering keeps the dense part of a Mixture-of-Experts model and its most-used experts in VRAM. The other experts
+behemoe keeps the dense part of a Mixture-of-Experts model and its most-used experts in VRAM. The other experts
 stay in page-locked RAM, and the GPU reads them over PCIe with no copy (zero-copy Triton kernels). The experts are
 compressed with a 2–4.5-bit trellis code (QTIP/EXL3-style), so a 235B model fits in 24 GB of VRAM plus 64 GB of RAM.
 An auto-config picks the compression level and the VRAM/RAM split for the machine it runs on.
@@ -49,7 +49,7 @@ An auto-config picks the compression level and the VRAM/RAM split for the machin
 - **Lower error at the same size.** 13–83% lower KL divergence from the BF16 model than llama.cpp GGUFs of the same
   size, on every model compared except gpt-oss. On the two models checked downstream, GSM8K and MMLU stay within
   noise of BF16.
-- **One command picks the setup.** `moe-tiering plan` ranks every compression level and VRAM/RAM split that fits the
+- **One command picks the setup.** `behemoe plan` ranks every compression level and VRAM/RAM split that fits the
   machine; `run` and `serve` use its pick.
 - **OpenAI-compatible server** with streaming chat completions.
 - **AMD and NVIDIA.** ROCm on Linux, CUDA on Windows. All kernels are Triton: no CUDA or HIP extension to build.
@@ -59,17 +59,17 @@ An auto-config picks the compression level and the VRAM/RAM split for the machin
 Python 3.10+, PyTorch 2.6+ with CUDA or ROCm, and a GPU.
 
 ```bash
-pip install git+https://github.com/damanhduc140902/moe-tiering
+pip install git+https://github.com/damanhduc140902/behemoe
 # GLM-5.x and DeepSeek-V4.1 need transformers >= 5.19:
-pip install "moe-tiering[new-archs] @ git+https://github.com/damanhduc140902/moe-tiering"
+pip install "behemoe[new-archs] @ git+https://github.com/damanhduc140902/behemoe"
 ```
 
 ```bash
-moe-tiering doctor                           # GPU, RAM, library versions
-moe-tiering plan  models/Qwen3.6-35B-A3B     # what would run on this machine (nothing is loaded)
-moe-tiering run   models/Qwen3.6-35B-A3B     # chat in the terminal
-moe-tiering serve models/Qwen3.6-35B-A3B --port 8000
-moe-tiering bench models/Qwen3.6-35B-A3B     # decode / prefill speed on this machine
+behemoe doctor                           # GPU, RAM, library versions
+behemoe plan  models/Qwen3.6-35B-A3B     # what would run on this machine (nothing is loaded)
+behemoe run   models/Qwen3.6-35B-A3B     # chat in the terminal
+behemoe serve models/Qwen3.6-35B-A3B --port 8000
+behemoe bench models/Qwen3.6-35B-A3B     # decode / prefill speed on this machine
 ```
 
 `serve` exposes an OpenAI-compatible API (`/v1/chat/completions` with streaming, `/v1/completions`, `/v1/models`):
@@ -85,9 +85,9 @@ tokenizer files. `--vram-gb` and `--ram-gb` override the detected budgets, `--va
 
 ### Getting models
 
-Pre-converted models will be published on Hugging Face (`moe-tiering pull <model>`); this is not available yet.
+Pre-converted models will be published on Hugging Face (`behemoe pull <model>`); this is not available yet.
 Converting a model yourself needs a GPU with enough memory for one layer, a calibration corpus and several hours to
-days (`python -m moe_tiering.convert_tcq --help`). The calibration tooling is not packaged yet.
+days (`python -m behemoe.convert_tcq --help`). The calibration tooling is not packaged yet.
 
 ## Speed
 
@@ -96,7 +96,7 @@ three runs. Hardware: one AMD MI250 GCD (64 GB; our VRAM budget is enforced in s
 peak), a host link of 14 GB/s, and llama.cpp's official ROCm build (b11641) with `--n-cpu-moe` moving expert layers
 to the CPU (8 threads) until it fits the budget.
 
-| Model | VRAM | moe-tiering | llama.cpp |
+| Model | VRAM | behemoe | llama.cpp |
 |---|---|---|---|
 | Qwen3-30B-A3B | 8 GB | **63.7 tok/s** (2.57-bit, 7.6 GB) | 39.3 (Q4_K_M, 7.4 GB), 38.7 (Q2_K, 7.4 GB) |
 | Qwen3.6-35B-A3B | 8 GB | **42.7** (2.57-bit, 7.6 GB) | 33.0 (Q4_K_M, 8.0 GB) |
@@ -153,15 +153,15 @@ server with the model's own chat template. With 250 problems, GSM8K differences 
 | Model | Engine | GSM8K | MMLU |
 |---|---|---|---|
 | Qwen3.6-35B-A3B | BF16 (vLLM) | 92.0 | 83.5 |
-| | moe-tiering 4.5-bit (H4) | 94.0 | 83.9 |
-| | moe-tiering 3.5-bit | 93.2 | 83.2 |
-| | moe-tiering 2.57-bit | 93.6 | 83.0 |
+| | behemoe 4.5-bit (H4) | 94.0 | 83.9 |
+| | behemoe 3.5-bit | 93.2 | 83.2 |
+| | behemoe 2.57-bit | 93.6 | 83.0 |
 | | llama.cpp Q4_K_M (no imatrix) | 94.4 | 81.6 |
 | | llama.cpp unsloth UD-Q4_K_M | 95.2 | 83.7 |
 | | llama.cpp Q3_K_M (no imatrix) | 94.8 | 61.8 (165 replies without a letter) |
 | GLM-4.7-Flash | BF16 (vLLM) | 92.8 | 71.6 |
-| | moe-tiering 4.5-bit (H4) | 90.0 | 71.6 |
-| | moe-tiering 2.57-bit | 89.6 | 70.2 |
+| | behemoe 4.5-bit (H4) | 90.0 | 71.6 |
+| | behemoe 2.57-bit | 89.6 | 70.2 |
 | | llama.cpp Q4_K_M (no imatrix) | 92.0 | 69.0 |
 
 ## How it works

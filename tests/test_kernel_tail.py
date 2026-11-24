@@ -50,7 +50,7 @@ THRESHOLD = 1e-6
 
 def load_kernels(path: str | None, name: str):
     if path is None:
-        from moe_tiering import kernels
+        from behemoe import kernels
 
         return kernels
     spec = importlib.util.spec_from_file_location(name, path)
@@ -157,7 +157,7 @@ def make_pool(fmt: int, bits: int, group: int, k: int, g: torch.Generator, dev):
 
 
 def reference(fmt: int, bits: int, group: int, p: dict, x64: torch.Tensor) -> torch.Tensor:
-    """[S, T, N] float64: every slot dequantized in float64 (moe_tiering.quant / moe_tiering.kquant packing), times every token."""
+    """[S, T, N] float64: every slot dequantized in float64 (behemoe.quant / behemoe.kquant packing), times every token."""
     b = p["qweight"].to(torch.int32)
     q = torch.stack([(b >> (bits * i)) & (2**bits - 1) for i in range(8 // bits)], -1).reshape(S, N, -1).double()
     k = q.shape[-1]
@@ -273,7 +273,7 @@ def config_assert(K, dev) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--kernels", help="test this kernels.py instead of moe_tiering/kernels.py")
+    ap.add_argument("--kernels", help="test this kernels.py instead of behemoe/kernels.py")
     ap.add_argument("--old-kernels", help="the pre-WP7 kernels.py: the prune property also compares with it")
     ap.add_argument("--quick", action="store_true", help="fixed configs: every tail one + 3 primary; autotuned at 8 pairs")
     ap.add_argument("--prune-only", action="store_true", help="part 1 only (no GPU needed)")

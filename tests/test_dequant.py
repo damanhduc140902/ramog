@@ -1,4 +1,4 @@
-"""moe_tiering.dequant on synthetic tensors: float64 definitions, transformers' own decoders, round trips (CPU, seconds).
+"""behemoe.dequant on synthetic tensors: float64 definitions, transformers' own decoders, round trips (CPU, seconds).
 
 Checks
   formats      torch's float8_e4m3fn / float8_e5m2 -> float and the E2M1 table equal the OCP bit-field definitions
@@ -41,7 +41,7 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from moe_tiering import dequant as dq  # noqa: E402
+from behemoe import dequant as dq  # noqa: E402
 
 E8M0 = getattr(torch, "float8_e8m0fnu", None)
 FP4X2 = getattr(torch, "float4_e2m1fn_x2", None)

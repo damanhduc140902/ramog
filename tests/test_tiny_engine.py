@@ -2,11 +2,11 @@
 
 1. Writes a random checkpoint in the Hugging Face layout of Qwen3-MoE (per-expert gate/up/down tensors + index;
    router logits spread out so that rounding rarely flips the top-k: a smooth network, hence a sharp test).
-2. Converts it with moe_tiering.convert: hot rtn 4-bit g64 + cold k4row 2-bit g16 (plain weight-MSE importance).
+2. Converts it with behemoe.convert: hot rtn 4-bit g64 + cold k4row 2-bit g16 (plain weight-MSE importance).
 3. Reference: a float32 transformers forward of the same checkpoint with every expert replaced by its dequantized
    k4row blob (what the engine must reproduce), and the original weights (only to size the quantization effect).
 4. Engine, --hot-from-cold (every expert served from k4row blobs: VRAM cache, pinned-host zero-copy, prefetch
-   staging; a small cache so all three are used): moe_tiering.session.TeacherForced's graph-captured one-token decode with
+   staging; a small cache so all three are used): behemoe.session.TeacherForced's graph-captured one-token decode with
    cache maintenance between replays; per position KL(reference || engine) on the full vocabulary and top-1.
    Pass: the engine's KL is at the bf16 noise floor (KL between float32 and bf16 forwards of the reference,
    <= 3x floor + 2e-4) and below 5% of the quantization effect (KL original vs dequantized weights).
@@ -30,10 +30,10 @@ import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from moe_tiering import arch  # noqa: E402
-from moe_tiering.build import build_converted, reset_stats, stats  # noqa: E402
-from moe_tiering.convert import convert  # noqa: E402
-from moe_tiering.store import BlobLayout  # noqa: E402
+from behemoe import arch  # noqa: E402
+from behemoe.build import build_converted, reset_stats, stats  # noqa: E402
+from behemoe.convert import convert  # noqa: E402
+from behemoe.store import BlobLayout  # noqa: E402
 
 FUSED = re.compile(r"model\.layers\.(\d+)\.mlp\.experts\.(gate_up_proj|down_proj)$")
 
@@ -115,7 +115,7 @@ def kl_rows(p_logp: torch.Tensor, q_logp: torch.Tensor) -> torch.Tensor:
 def run_engine(path: Path, meta: dict, tokens: torch.Tensor, ref: torch.Tensor, seq_len: int, *, prefetch=True,
                manager=True, graph=True, warm_all=False) -> dict:
     """Teacher-forced decode of `tokens` through the engine built from `path` with --hot-from-cold; KL vs ref."""
-    from moe_tiering import session  # TeacherForced: graph-captured single-token decode with external input ids
+    from behemoe import session  # TeacherForced: graph-captured single-token decode with external input ids
 
     gc.collect()
     torch.cuda.empty_cache()
@@ -139,7 +139,7 @@ def run_engine(path: Path, meta: dict, tokens: torch.Tensor, ref: torch.Tensor, 
     with torch.no_grad():
         for t in range(seq_len - 1):
             runner.ids.copy_(tokens[t].view(1, 1))
-            runner.pos.fill_(t)  # explicit position ids (moe_tiering.session, WP9)
+            runner.pos.fill_(t)  # explicit position ids (behemoe.session, WP9)
             runner.manager.step()
             if graph:
                 runner.graph.replay()
@@ -204,7 +204,7 @@ def main():
         print(name, res[name], flush=True)
 
     # normal store: hot rtn 4-bit cache + cold k4row, prefill + greedy generation through GraphDecoder
-    from moe_tiering.runner import GraphDecoder
+    from behemoe.runner import GraphDecoder
 
     dense = (store / "dense.safetensors").stat().st_size
     vram = (torch.cuda.memory_allocated() + 0.75 * 2**30 + 1.5 * dense + meta["cold"]["nbytes"]

@@ -1,4 +1,4 @@
-"""moe_tiering.hostmem: exact-size page-locked blobs, read zero-copy by the kernels (CUDA/Windows and ROCm/Linux).
+"""behemoe.hostmem: exact-size page-locked blobs, read zero-copy by the kernels (CUDA/Windows and ROCm/Linux).
 
 Checks: the file bytes arrive intact, the tensor is pinned at exact size (no power-of-two rounding), the grouped
 GEMV reads a registered k4row pool zero-copy (inside a CUDA graph too, seeing host updates made after capture),
@@ -18,9 +18,9 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from moe_tiering import hostmem  # noqa: E402
-from moe_tiering.kernels import copy_blobs, grouped_gemv  # noqa: E402
-from moe_tiering.store import BlobLayout  # noqa: E402
+from behemoe import hostmem  # noqa: E402
+from behemoe.kernels import copy_blobs, grouped_gemv  # noqa: E402
+from behemoe.store import BlobLayout  # noqa: E402
 
 
 def ref_gemv(lay, pool, x, tok, ids):

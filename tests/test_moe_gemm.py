@@ -1,4 +1,4 @@
-"""Grouped dequant-GEMM (moe_tiering.kernels.moe_gemm, the prefill path) vs a float64 reference, both weight formats.
+"""Grouped dequant-GEMM (behemoe.kernels.moe_gemm, the prefill path) vs a float64 reference, both weight formats.
 
 Cases: FMT 0 (rtn, groups 32/64) and FMT 1 (k4row, groups 16/64) x bits 2, 4 x the expert matrix shapes of
 Qwen3-30B (gate_up [1536, 2048], down [2048, 768]) and Qwen3-235B ([3072, 4096], [4096, 1536]) x the pool in VRAM
@@ -23,9 +23,9 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from moe_tiering.kernels import (LDS_BYTES, _device_target, _gemm_smem, block_m_for, dot_f32,  # noqa: E402
+from behemoe.kernels import (LDS_BYTES, _device_target, _gemm_smem, block_m_for, dot_f32,  # noqa: E402
                             moe_blocks, moe_gemm)
-from moe_tiering.store import BlobLayout  # noqa: E402
+from behemoe.store import BlobLayout  # noqa: E402
 
 S = 24  # experts in the pool
 TOPK = 8

@@ -1,7 +1,7 @@
-"""QEmbedding (moe_tiering/qembed.py) == nn.Embedding on the dequantized table, on the GPU and from pinned host memory.
+"""QEmbedding (behemoe/qembed.py) == nn.Embedding on the dequantized table, on the GPU and from pinned host memory.
 
 Table: the real Qwen3-30B dense-c embedding from a convert_dense directory (--packed; 151936 x 2048, k4row 4-bit
-g32) or a synthetic one quantized with moe_tiering.kquant (same format). Reference: F.embedding(ids, T) with
+g32) or a synthetic one quantized with behemoe.kquant (same format). Reference: F.embedding(ids, T) with
 T = kquant.dequantize(codes, sb, d, dmin).to(dtype), i.e. nn.Embedding holding the dequantized table. For both
 placements (host=False: GPU table; host=True: page-locked host table read zero-copy), both output dtypes (bf16, the
 model's; float32) and both lookups (fused Triton kernel; torch ops), the lookup must equal the reference bit for bit, for
@@ -27,8 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 
-from moe_tiering import kquant  # noqa: E402
-from moe_tiering.qembed import QEmbedding  # noqa: E402
+from behemoe import kquant  # noqa: E402
+from behemoe.qembed import QEmbedding  # noqa: E402
 
 
 def bitwise_equal(a: torch.Tensor, b: torch.Tensor) -> bool:
@@ -103,7 +103,7 @@ def main():
     gen.manual_seed(0)
     t0 = time.time()
     if args.packed:
-        from moe_tiering.dense_recipe import PackedDense
+        from behemoe.dense_recipe import PackedDense
 
         kp, _ = PackedDense(args.packed).get("model.embed_tokens", dev)
         src = "real Qwen3-30B embed_tokens (packed)"
