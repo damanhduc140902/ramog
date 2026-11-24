@@ -1,16 +1,95 @@
-# moe-tiering
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img alt="moe-tiering" src="assets/logo-light.svg" width="420">
+  </picture>
+</p>
 
-Run big Mixture-of-Experts language models on **one GPU plus system RAM**.
+<h3 align="center">Run big Mixture-of-Experts LLMs on one GPU plus system RAM</h3>
 
-The dense part of the model and the most-used experts live in VRAM. The other experts stay in page-locked RAM, and
-the GPU reads them over PCIe with no copy (zero-copy Triton kernels). The experts are compressed with a 2–4.5-bit
-trellis code (QTIP/EXL3-style), so a 235B model fits in 24 GB of VRAM plus 64 GB of RAM. An auto-config picks the
-compression level and the VRAM/RAM split for the machine it runs on.
+<p align="center">
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white">
+  <img alt="PyTorch 2.6+" src="https://img.shields.io/badge/PyTorch-2.6%2B-EE4C2C?logo=pytorch&logoColor=white">
+  <img alt="GPU: ROCm or CUDA" src="https://img.shields.io/badge/GPU-ROCm%20%7C%20CUDA-555">
+  <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-orange">
+</p>
 
-**Status: alpha.** Tested on AMD GPUs (ROCm, Linux) and NVIDIA GPUs (CUDA, Windows). The quality results below were
-each re-run by an independent check (GLM-5.3's not yet).
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#speed">Speed</a> ·
+  <a href="#quality">Quality</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#supported-models">Supported models</a> ·
+  <a href="#limitations">Limitations</a>
+</p>
 
-## Speed: one GPU, small VRAM
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/speed-8gb-dark.svg">
+    <img alt="Decode speed with an 8 GB VRAM budget, tokens per second, moe-tiering 2.57-bit vs llama.cpp Q4_K_M: Qwen3-30B-A3B 63.7 vs 39.3, Qwen3.6-35B-A3B 42.7 vs 33.0, GLM-4.7-Flash 32.8 vs 26.8, Gemma-4-26B-A4B 40.8 vs 34.5" src="assets/speed-8gb-light.svg" width="800">
+  </picture>
+</p>
+
+moe-tiering keeps the dense part of a Mixture-of-Experts model and its most-used experts in VRAM. The other experts
+stay in page-locked RAM, and the GPU reads them over PCIe with no copy (zero-copy Triton kernels). The experts are
+compressed with a 2–4.5-bit trellis code (QTIP/EXL3-style), so a 235B model fits in 24 GB of VRAM plus 64 GB of RAM.
+An auto-config picks the compression level and the VRAM/RAM split for the machine it runs on.
+
+> [!NOTE]
+> **Alpha.** Tested on AMD GPUs (ROCm, Linux) and NVIDIA GPUs (CUDA, Windows). Pre-converted models are not published
+> yet, so for now you convert a model yourself (see [Getting models](#getting-models)).
+
+## Highlights
+
+- **Big models, small GPUs.** Qwen3-30B-A3B, Qwen3.6-35B-A3B, GLM-4.7-Flash and Gemma-4-26B-A4B run in 8 GB of VRAM;
+  Qwen3-235B-A22B runs in 24 GB of VRAM plus 64 GB of RAM.
+- **Faster than llama.cpp when the model does not fit.** 1.2–1.6x the decode speed at 8 GB of VRAM, and 1000–1300 vs
+  400–500 tokens/s prompt processing, because the GPU does all the math. With the whole model in VRAM the two are level.
+- **Lower error at the same size.** 13–83% lower KL divergence from the BF16 model than llama.cpp GGUFs of the same
+  size, on every model compared except gpt-oss. On the two models checked downstream, GSM8K and MMLU stay within
+  noise of BF16.
+- **One command picks the setup.** `moe-tiering plan` ranks every compression level and VRAM/RAM split that fits the
+  machine; `run` and `serve` use its pick.
+- **OpenAI-compatible server** with streaming chat completions.
+- **AMD and NVIDIA.** ROCm on Linux, CUDA on Windows. All kernels are Triton: no CUDA or HIP extension to build.
+
+## Quick start
+
+Python 3.10+, PyTorch 2.6+ with CUDA or ROCm, and a GPU.
+
+```bash
+pip install git+https://github.com/damanhduc140902/moe-tiering
+# GLM-5.x and DeepSeek-V4.1 need transformers >= 5.19:
+pip install "moe-tiering[new-archs] @ git+https://github.com/damanhduc140902/moe-tiering"
+```
+
+```bash
+moe-tiering doctor                           # GPU, RAM, library versions
+moe-tiering plan  models/Qwen3.6-35B-A3B     # what would run on this machine (nothing is loaded)
+moe-tiering run   models/Qwen3.6-35B-A3B     # chat in the terminal
+moe-tiering serve models/Qwen3.6-35B-A3B --port 8000
+moe-tiering bench models/Qwen3.6-35B-A3B     # decode / prefill speed on this machine
+```
+
+`serve` exposes an OpenAI-compatible API (`/v1/chat/completions` with streaming, `/v1/completions`, `/v1/models`):
+
+```bash
+curl http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello!"}], "max_tokens": 200}'
+```
+
+A model directory holds one subdirectory per variant (`H4`, `TQ4.0`, `TQ3.5`, `TQ3.0`, `TQ2.57`, ...) plus the
+tokenizer files. `--vram-gb` and `--ram-gb` override the detected budgets, `--variant` forces one variant, and
+`--prefer quality|balanced|speed` moves the auto-config's trade-off.
+
+### Getting models
+
+Pre-converted models will be published on Hugging Face (`moe-tiering pull <model>`); this is not available yet.
+Converting a model yourself needs a GPU with enough memory for one layer, a calibration corpus and several hours to
+days (`python -m moe_tiering.convert_tcq --help`). The calibration tooling is not packaged yet.
+
+## Speed
 
 Decode speed at batch 1 against llama.cpp on the same GPU, same prompt (~520 tokens), 256 generated tokens, median of
 three runs. Hardware: one AMD MI250 GCD (64 GB; our VRAM budget is enforced in software, llama.cpp's is its measured
@@ -38,12 +117,13 @@ Where the cold experts are most of the model (MiniMax-M2, Qwen3-235B), speed is 
 2.57 bits reads 1.3 GB of experts per token, 11.4 GB/s here, 80% of what a plain copy reaches on this machine. A
 desktop with PCIe 4.0/5.0 x16 has 2–4x this link; llama.cpp's CPU experts instead depend on RAM bandwidth and cores.
 
-## Quality: lower error than llama.cpp at the same size
+## Quality
 
 Error is measured as KL divergence from the unquantized (BF16) model's next-token distribution. We use 84 text
 windows in four sets: two familiar-text sets, and two sets of new text (recent arXiv abstracts, Vietnamese, Chinese,
 Rust/C) that no quantization choice was tuned on. Each row compares our best variant **at or below the size** of a
-llama.cpp GGUF of the same model. The percentage is how much lower our KL is, across the four sets.
+llama.cpp GGUF of the same model. The percentage is how much lower our KL is, across the four sets. Each result was
+re-run by an independent check (GLM-5.3's not yet).
 
 | Model | ~4 bits vs Q4_K_M | ~3.5 bits vs Q3_K_M | ~2–2.5 bits vs IQ2 |
 |---|---|---|---|
@@ -67,8 +147,8 @@ mostly from how we compress the attention and other dense weights.
 ### Downstream accuracy
 
 GSM8K (first 250 test problems, greedy, step-by-step reasoning in up to 768 tokens) and MMLU (570 questions, 10 per
-subject, "answer with the letter only" in up to 8 tokens), thinking off, through each engine's OpenAI-compatible server with the model's own chat template. With 250
-problems, GSM8K differences under ~4 points are noise.
+subject, "answer with the letter only" in up to 8 tokens), thinking off, through each engine's OpenAI-compatible
+server with the model's own chat template. With 250 problems, GSM8K differences under ~4 points are noise.
 
 | Model | Engine | GSM8K | MMLU |
 |---|---|---|---|
@@ -83,43 +163,6 @@ problems, GSM8K differences under ~4 points are noise.
 | | moe-tiering 4.5-bit (H4) | 90.0 | 71.6 |
 | | moe-tiering 2.57-bit | 89.6 | 70.2 |
 | | llama.cpp Q4_K_M (no imatrix) | 92.0 | 69.0 |
-
-## Install
-
-Python 3.10+, PyTorch 2.6+ with CUDA or ROCm, and a GPU.
-
-```bash
-pip install git+https://github.com/damanhduc140902/moe-tiering
-# GLM-5.x and DeepSeek-V4.1 need transformers >= 5.19:
-pip install "moe-tiering[new-archs] @ git+https://github.com/damanhduc140902/moe-tiering"
-```
-
-## Use
-
-```bash
-moe-tiering doctor                           # GPU, RAM, library versions
-moe-tiering plan  models/Qwen3.6-35B-A3B     # what would run on this machine (nothing is loaded)
-moe-tiering run   models/Qwen3.6-35B-A3B     # chat in the terminal
-moe-tiering serve models/Qwen3.6-35B-A3B --port 8000
-moe-tiering bench models/Qwen3.6-35B-A3B     # decode / prefill speed on this machine
-```
-
-`serve` exposes an OpenAI-compatible API (`/v1/chat/completions` with streaming, `/v1/completions`, `/v1/models`):
-
-```bash
-curl http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json" \
-  -d '{"messages": [{"role": "user", "content": "Hello!"}], "max_tokens": 200}'
-```
-
-A model directory holds one subdirectory per variant (`H4`, `TQ4.0`, `TQ3.5`, `TQ3.0`, `TQ2.57`, ...) plus the
-tokenizer files. `--vram-gb` and `--ram-gb` override the detected budgets, `--variant` forces one variant, and
-`--prefer quality|balanced|speed` moves the auto-config's trade-off.
-
-### Getting models
-
-Pre-converted models will be published on Hugging Face (`moe-tiering pull <model>`); this is not available yet.
-Converting a model yourself needs a GPU with enough memory for one layer, a calibration corpus and several hours to
-days (`python -m moe_tiering.convert_tcq --help`). The calibration tooling is not packaged yet.
 
 ## How it works
 
@@ -138,7 +181,7 @@ days (`python -m moe_tiering.convert_tcq --help`). The calibration tooling is no
 - **Auto-config** ranks every variant and placement that fits the machine's VRAM and RAM by measured quality and
   estimated speed, and picks one. RAM headroom for the OS is kept.
 
-## Supported architectures
+## Supported models
 
 Qwen3-MoE, Qwen3.5/3.6-MoE, GLM-4.7-Flash, GLM-5.3 and GLM-5.3-Flash, Gemma-4 MoE, MiniMax-M2, gpt-oss, and
 DeepSeek-V4.1-Flash (our own port of the reference code; transformers has no implementation).
@@ -151,6 +194,15 @@ DeepSeek-V4.1-Flash (our own port of the reference code; transformers has no imp
   than the others.
 - One request at a time in `serve`; each chat turn re-reads the whole conversation (no prompt cache yet).
 - Speed measured on an AMD MI250 only; correctness also checked on an NVIDIA GTX 1650 laptop (CUDA, Windows).
+
+## Acknowledgements
+
+The trellis code follows [QTIP](https://github.com/Cornell-RelaxML/qtip) and
+[ExLlamaV3](https://github.com/turboderp-org/exllamav3), and BlockLDLQ comes from
+[QuIP#](https://github.com/Cornell-RelaxML/quip-sharp). Models run on
+[Hugging Face Transformers](https://github.com/huggingface/transformers), kernels are written in
+[Triton](https://github.com/triton-lang/triton), and [llama.cpp](https://github.com/ggml-org/llama.cpp) is the
+baseline we measure against.
 
 ## License
 
