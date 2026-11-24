@@ -40,11 +40,16 @@ def _enabled() -> bool:
 
 def tuners() -> dict:
     """name -> triton Autotuner of every autotuned kernel the engine launches."""
+    from . import gemv1, klinear
+
     out = {}
-    for name in ("_grouped_gemv", "_grouped_gemv_host", "_moe_gemm", "_moe_gemm_host"):
-        t = getattr(kernels, name, None)
-        if t is not None and hasattr(t, "cache"):
-            out[name] = t
+    for mod, names in ((kernels, ("_grouped_gemv", "_grouped_gemv_host", "_moe_gemm", "_moe_gemm_host",
+                                  "_grouped_gemv_bytes", "_grouped_gemv_bytes_host")),
+                       (gemv1, ("_gemv1", "_gemv1b")), (klinear, ("_gemv_det",))):
+        for name in names:
+            t = getattr(mod, name, None)
+            if t is not None and hasattr(t, "cache"):
+                out[name] = t
     return out
 
 
@@ -73,8 +78,13 @@ def device_name(device=None) -> str:
 
 
 def _kernels_hash() -> str:
-    with open(kernels.__file__, "rb") as f:
-        return hashlib.sha256(f.read()).hexdigest()[:12]
+    from . import gemv1
+
+    h = hashlib.sha256()
+    for m in (kernels, gemv1):
+        with open(m.__file__, "rb") as f:
+            h.update(f.read())
+    return h.hexdigest()[:12]
 
 
 def _locate(device=None) -> tuple[str, str]:
@@ -115,8 +125,41 @@ def _count() -> int:
     return sum(len(t.cache) for t in tuners().values())
 
 
+def lean_benchmark_flush() -> bool:
+    """Triton's do_bench clears the cache between timing runs with a fresh 256 MiB buffer per benchmark (triton 3.6
+    backends/amd|nvidia driver.py get_empty_cache_for_benchmark). A first-run autotune happens after the expert cache
+    has filled the VRAM budget, where 256 MiB may not be free (GLM-4.7-Flash H4 at 8 GiB: OOM in the first
+    grouped_gemv tune). On OOM the buffer falls back to 32 MiB, then 4 MiB: it still evicts an L2, less of a large
+    last-level cache, so those timings can come out a little optimistic. Returns True when installed now."""
+    try:
+        import triton
+
+        drv = triton.runtime.driver.active
+    except Exception:  # noqa: BLE001 - no triton / no GPU driver: nothing to tune
+        return False
+    orig = getattr(drv, "get_empty_cache_for_benchmark", None)
+    if orig is None or getattr(orig, "_moe_tiering", False):
+        return False
+
+    def flush_buffer():
+        try:
+            return orig()
+        except torch.OutOfMemoryError:
+            for mib in (32, 4):
+                try:
+                    return torch.empty(mib * 2**20 // 4, dtype=torch.int, device="cuda")
+                except torch.OutOfMemoryError:
+                    continue
+            raise
+
+    flush_buffer._moe_tiering = True
+    drv.get_empty_cache_for_benchmark = flush_buffer
+    return True
+
+
 def load(device=None) -> int:
     """Put the saved choices for this GPU and versions into the autotuners. Returns how many were loaded."""
+    lean_benchmark_flush()
     if not _enabled():
         return 0
     with _lock:

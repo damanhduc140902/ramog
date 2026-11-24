@@ -224,6 +224,8 @@ class Variant:
     counts: bool = True       # counts.safetensors present (a split needs it)
     gib: float | None = None  # sizing="qd": the reference's experts GiB (sizes.json, rounded)
     dense_facts: dict | None = None  # {recipe: DenseFacts} of this store's own dense parts (default: Facts.dense)
+    hit: tuple | None = None  # per MoE layer: hit[s] = share of routed pairs that the s most routed experts serve
+    #                           (calibration counts; the speed estimate's VRAM hit rate of s frozen slots)
 
     def experts_bytes(self, E: int) -> int:
         return E * sum(self.nbytes)
@@ -237,6 +239,7 @@ class Facts:
     two_tier: bool = False    # a WP18 hot tier (H4 copies over a pinned rung) can be built: the decision grid only
     sizing: str = "engine"    # "engine" (loader.cache_slots on bytes) | "qd" (the reference's GiB arithmetic)
     qd_dense_c5: float | None = None  # sizing="qd": dense at 5 bpw (the reference's refusal test)
+    top_k: int = 8            # experts per token (the speed estimate)
 
 
 @dataclass
@@ -267,6 +270,8 @@ class Config:
     alternative: dict | None = None
     inputs: dict = field(default_factory=dict)
     qd: dict | None = None           # sizing="qd": the reference's own GiB figures (golden comparison)
+    est_tok_s: float | None = None   # decode speed estimate (speed_estimate; rough, for ranking and display)
+    cold_mb_per_token: float | None = None  # expert bytes read from pinned RAM per token (estimate)
 
     @property
     def placement(self) -> str | None:
@@ -280,7 +285,8 @@ class Config:
             raise NotImplementedError("two tiers (design-quality WP18) are not built")
         frozen = E if self.placement == "resident" else (self.frozen if self.mode == "split" else None)
         return {"hot_from_cold": True, "dense_bits": 0, "dense_q": self.dense, "frozen": frozen,
-                "embed_host": self.embed_host, "head_host": self.head_host}
+                "embed_host": self.embed_host, "head_host": self.head_host,
+                "slots": self.slots if self.mode == "split" else None}
 
     def as_dict(self) -> dict:
         d = asdict(self)
@@ -295,7 +301,9 @@ class Config:
              + (f" ({self.frozen} frozen + {self.dynamic} dynamic)" if self.mode == "split" else "")
              + f", {self.pinned_bytes / GiB:.2f} GiB of experts pinned (budget {self.pinned_budget_bytes / GiB:.2f})"
              + (f", {host[3:]} on host" if host else "")
-             + f"; 30B KL {self.kl:.4f} (tuning-set score {self.score:.4f})")
+             + f"; 30B KL {self.kl:.4f} (tuning-set score {self.score:.4f})"
+             + (f"; ~{self.est_tok_s:.0f} tok/s est. ({self.cold_mb_per_token:.0f} MB/token from RAM)"
+                if self.est_tok_s else ""))
         return s
 
 
@@ -360,15 +368,56 @@ def mem_total_gib():
     return _meminfo().get("total")
 
 
+# planned on top of the dense estimate: the engine sizes its cache from the dense part it measures, and a split's
+# frozen experts get no host copy, so the rule must never plan more slots than the engine finds (gpt-oss-120b TQ2.57
+# at 24 GiB: estimate 6 MB under the measured 3.596 GiB, 69 planned vs 68 slots: refused at load)
+DENSE_MARGIN = 64 << 20
+
+
 def _slots_engine(vram_gib: float, dense_bytes: int, hot_nb, cold_nb) -> dict:
     from .loader import cache_slots  # the engine's own sizing (amendment 5)
 
-    return cache_slots(vram_gib, dense_bytes, hot_nb, cold_nb)
+    return cache_slots(vram_gib, dense_bytes + DENSE_MARGIN, hot_nb, cold_nb)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
 # the rule
 
+
+BASE_MS_PER_LAYER = {"k4row": 0.19, "tcq": 0.25}  # resident step per MoE layer (MI250, Qwen3-30B: H4 9.1 / TQ 11.9 ms)
+HOST_EFFICIENCY = 0.75  # zero-copy GEMV reads vs a pinned copy's bandwidth (MI250: ~19 of ~25 GB/s)
+
+
+def speed_estimate(v: Variant, facts: Facts, mode: str, slots: int, host_gbps: float | None):
+    """(ms per token, MB per token from pinned RAM) of variant v placed with `slots` VRAM slots per layer (resident /
+    all-hot: no host reads). Rough: a per-layer fixed cost by format plus the expected cold bytes (calibration hit
+    curve) over the host link; it ranks placements, it does not promise a speed."""
+    n = len(v.nbytes)
+    base = n * BASE_MS_PER_LAYER["tcq" if v.name.startswith("TQ") else "k4row"]
+    if mode in ("resident", "all-hot") or v.hit is None:
+        return base, 0.0
+    s = max(0, min(slots, facts.E))
+    cold = sum(facts.top_k * (1.0 - h[s]) * nb for h, nb in zip(v.hit, v.nbytes, strict=True))
+    bw = (host_gbps or 12.0) * HOST_EFFICIENCY * 1e9
+    return base + cold / bw * 1e3, cold / 1e6
+
+
+def _hit_curves(root: str, meta: dict):
+    c = meta.get("counts")
+    if not c:
+        return None
+    try:
+        from safetensors import safe_open
+
+        with safe_open(os.path.join(root, c["file"]), "pt") as f:
+            counts = f.get_tensor(c.get("key", "counts")).double()
+    except Exception:  # noqa: BLE001 - the estimate is optional
+        return None
+    srt = counts.sort(dim=1, descending=True).values
+    cum = srt.cumsum(1) / srt.sum(1, keepdim=True).clamp_min(1e-30)
+    return tuple((0.0, *row) for row in cum.tolist())
+
+STATIC_SPLIT = os.environ.get("MOE_TIERING_STATIC_SPLIT", "1") != "0"  # see _place; 0 keeps rule v3's cached placement
 
 def _place(facts: Facts, v: Variant, d: DenseFacts, vram: float, pinned: float, moved: int):
     """One-tier placement of variant v with recipe d: (mode, F, pinned bytes|GiB, slots, info) or None.
@@ -401,6 +450,12 @@ def _place(facts: Facts, v: Variant, d: DenseFacts, vram: float, pinned: float, 
     if S >= E:
         return "resident", E, 0, E, info
     pb = int(pinned * GiB)
+    if STATIC_SPLIT and v.counts and (E - S) * slot <= pb:
+        # static split: every slot frozen with the most routed experts (calibration counts), the rest read zero-copy
+        # from pinned RAM, no dynamic cache, manager or prefetch. At batch 1 that beat the dynamic cache everywhere
+        # it was measured (agents/speed/static_split.py, Qwen3-30B TQ2.57 at 8 GB on an MI250: 49-59 tok/s on three
+        # prompts vs 32-34 cached) and pins fewer bytes (E - S experts instead of E).
+        return "split", S, (E - S) * slot, S, info
     if g <= pb:
         return "cached", 0, g, S, info
     if not v.counts:
@@ -517,7 +572,7 @@ def _decide(cs: list, hot: str):
 
 def choose(facts: Facts, variants: list, vram_gib: float, ram_gib: float, mem_available_gib=None, nvme=None, *,
            ram_reserve: float | None = None, hot: str = "auto", only: str | None = None,
-           host_fallback: bool | None = None) -> Config:
+           host_fallback: bool | None = None, prefer: str = "balanced", host_gbps: float | None = None) -> Config:
     """Rule v3 (module docstring). variants: the Variant entries present (stores, or a grid's). only: a variant name
     (--variant NAME): the rule restricted to it. host_fallback: amendment 4 (default: on for sizing "engine", off for
     the reference's "qd")."""
@@ -544,8 +599,20 @@ def choose(facts: Facts, variants: list, vram_gib: float, ram_gib: float, mem_av
     if not cs:
         return Config(fit=False, why=_refusal(facts, variants, vram_gib, ram_gib, mem_available_gib, ram_reserve,
                                               only, host_fallback), inputs=inputs)
+    for c in cs:
+        c["est_ms"], c["cold_mb"] = speed_estimate(c["variant"], facts, c["mode"], c["slots"], host_gbps)
+    if prefer not in ("balanced", "quality", "speed"):
+        raise ValueError(f"prefer={prefer!r}: balanced, quality or speed")
+    if prefer == "speed":
+        cs = [min(cs, key=lambda c: (c["est_ms"], c["score"]))]
+    elif prefer == "balanced":  # the rule's choice among the placements within 1 / 0.6 of the fastest estimate
+        fastest = min(c["est_ms"] for c in cs)
+        cs = [c for c in cs if c["est_ms"] <= fastest / 0.6]
+    inputs.update({"prefer": prefer, "host_gbps": host_gbps})
     ch, alt = _decide(cs, hot)
     cfg = _to_config(ch, facts, pinned, alt)
+    cfg.est_tok_s = round(1e3 / ch["est_ms"], 1)
+    cfg.cold_mb_per_token = round(ch["cold_mb"], 1)
     cfg.inputs = inputs
     return cfg
 
@@ -627,6 +694,11 @@ def _numel(shape) -> int:
     return n
 
 
+# packed dense modules the engine holds as bf16 nn.Linear after load (moe_tiering.fuse.dequant_mla_kv): MLA's kv_b_proj runs
+# over every cached position at each decode step, a GEMM the vendor BLAS does far faster than the k4row kernels
+BF16_DECODE_MODULES = ("kv_b_proj",)
+
+
 def dense_facts(root: str, meta: dict, recipe: str) -> DenseFacts:
     """The dense part of a store with packed recipe `recipe` as the engine holds it (moe_tiering.loader.load_dense):
     the packed arrays of every packed module (routers and non-input embeddings stay as dense.safetensors holds them),
@@ -657,6 +729,10 @@ def dense_facts(root: str, meta: dict, recipe: str) -> DenseFacts:
             R = -(-(4 + H * int(t["bits"]) // 8 + H // int(t["group"])) // 4) * 4
             emb_name, emb_bytes = name, _alloc(V * R)
             packed += emb_bytes + 512
+        elif name.rsplit(".", 1)[-1] in BF16_DECODE_MODULES and t.get("shape"):
+            # moe_tiering.fuse.dequant_mla_kv: a bf16 nn.Linear of the dequantized weights replaces the packed module
+            nb = _alloc(_numel(t["shape"]) * 2) + (_alloc(int(t["shape"][0]) * 2) if f"{name}.bias" in hdr else 0)
+            packed += nb
         else:
             # moe_tiering.klinear.KLinear: the packed arrays (+ bias) and two int32 [8] index buffers
             nb = sum(_alloc(_numel(hdr[k][1]) * _DT[hdr[k][0]]) for k in hdr if k.startswith(name + ".")
@@ -734,8 +810,12 @@ def read_stores(stores) -> tuple:
             old = facts.dense.get(r)
             if old is None or df.vram_bytes > old.vram_bytes:
                 facts.dense[r] = df  # the model's figure (refusal messages): the largest of the stores'
+        cfgd = meta.get("config") or {}
+        tk = cfgd.get("num_experts_per_tok") or (cfgd.get("text_config") or {}).get("num_experts_per_tok")
+        if tk:
+            facts.top_k = int(tk)
         variants.append(Variant(name=name, nbytes=cold_nbytes(meta), store=root, dense=recipes,
-                                counts=bool(meta.get("counts")), dense_facts=own))
+                                counts=bool(meta.get("counts")), dense_facts=own, hit=_hit_curves(root, meta)))
     if not variants:
         raise ValueError(f"no usable variant among {dirs}: {skipped}")
     facts.skipped = skipped
@@ -743,7 +823,8 @@ def read_stores(stores) -> tuple:
 
 
 def plan(stores, vram_gib: float, ram_gib: float | None = None, *, mem_available_gib="read",
-         ram_reserve: float | None = None, variant: str = "auto", hot: str = "auto", nvme=None, log=print) -> Config:
+         ram_reserve: float | None = None, variant: str = "auto", hot: str = "auto", nvme=None, log=print,
+         prefer: str = "balanced", host_gbps: float | None = None) -> Config:
     """choose() over store-v2 directories. ram_gib None: this machine's MemTotal. mem_available_gib "read": read it
     now (Linux MemAvailable / Windows ullAvailPhys), None: not used. variant "auto" or a name (--variant NAME)."""
     facts, variants = read_stores(stores)
@@ -754,7 +835,7 @@ def plan(stores, vram_gib: float, ram_gib: float | None = None, *, mem_available
             raise ValueError("this OS does not report its RAM: pass --ram-gb")
     avail = meminfo.get("available") if mem_available_gib == "read" else mem_available_gib
     cfg = choose(facts, variants, vram_gib, ram_gib, avail, nvme, ram_reserve=ram_reserve, hot=hot,
-                 only=None if variant in (None, "auto") else variant)
+                 only=None if variant in (None, "auto") else variant, prefer=prefer, host_gbps=host_gbps)
     cfg.inputs["mem_total_gib"] = meminfo.get("total")
     cfg.inputs["dense_facts"] = {k: asdict(v) for k, v in facts.dense.items()}
     cfg.inputs["E"] = facts.E

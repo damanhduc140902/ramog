@@ -206,6 +206,95 @@ _grouped_gemv_host = triton.autotune(configs=_host_configs() + _tail_configs(hos
                                      prune_configs_by={"early_config_prune": _prune})(_gemv_body)
 
 
+# -- decode GEMV, byte-wise k4row (FMT 1, 4 or 8 bits) --------------------------------------------------------------
+# _gemv_body reads x with a stride of 32 / BITS and unpacks int32 words in a 3-D register tensor; for k4row at 4 and
+# 8 bits this kernel reads the codes as bytes (8-bit: one code per byte; 4-bit: low nibble first, the words'
+# little-endian order) and x contiguously, 2-D tensors only (moe_tiering.gemv1's dense-part kernel, here with the pair
+# tables and modes). Same math, same contract; on an MI250 the dense projections ran 2.3-3.5x faster this way.
+
+def _bconfigs(host: bool):
+    out = []
+    blocks = (2, 4, 8, 16) if host else (1, 2, 4, 8, 16, 32)
+    for block_n in blocks:
+        for words in (8, 16, 32, 64):
+            for warps in (1, 2, 4, 8):
+                out.append(triton.Config({"BLOCK_N": block_n, "WORDS": words}, num_warps=warps))
+    return out
+
+
+def _bprune(configs, named_args, **kwargs):
+    per = 32 // kwargs["BITS"]
+    k = named_args["K"]
+    ok = [c for c in configs if k % (c.kwargs["WORDS"] * per) == 0 and (c.kwargs["WORDS"] * per) % kwargs["GROUP"] == 0
+          and c.kwargs["BLOCK_N"] * c.kwargs["WORDS"] <= 2048]
+    if not ok:
+        raise ValueError(f"no byte-wise GEMV config fits K {k}, {kwargs['BITS']} bits, group {kwargs['GROUP']}")
+    return ok
+
+
+@triton.jit
+def _gemv_bytes(x_ptr, tok_ptr, slot_ptr, exp_ptr, qb_ptr, sb_ptr, d_ptr, dm_ptr, y_ptr, N, K, P_BUCKET,
+                stride_x, stride_qb_slot, stride_qb_row, stride_sb_slot, stride_sb_row, stride_d_slot, stride_y,
+                BITS: tl.constexpr, GROUP: tl.constexpr, MODE: tl.constexpr, BLOCK_N: tl.constexpr,
+                WORDS: tl.constexpr):
+    pid_p = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    tok = tl.load(tok_ptr + pid_p).to(tl.int64)
+    slot = tl.load(slot_ptr + pid_p).to(tl.int64)
+    if MODE == 1:
+        if slot < 0:
+            return
+    if MODE == 2:
+        if slot >= 0:
+            return
+        slot = tl.load(exp_ptr + pid_p).to(tl.int64)
+    PER: tl.constexpr = 32 // BITS
+    KB: tl.constexpr = WORDS * PER
+    NB: tl.constexpr = WORDS * 4
+    GPS: tl.constexpr = KB // GROUP
+    rows = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    ok = rows < N
+    bcol = tl.arange(0, NB)
+    gs = tl.arange(0, GPS)
+    qb = qb_ptr + slot * stride_qb_slot + rows[:, None].to(tl.int64) * stride_qb_row + bcol[None, :]
+    sbb = sb_ptr + slot * stride_sb_slot + rows[:, None].to(tl.int64) * stride_sb_row + gs[None, :]
+    xb = x_ptr + tok * stride_x
+    acc = tl.zeros((BLOCK_N, GPS), dtype=tl.float32)
+    accm = tl.zeros((BLOCK_N, GPS), dtype=tl.float32)
+    for it in range(0, K // KB):
+        b = tl.load(qb + it * NB, mask=ok[:, None], other=0).to(tl.int32)
+        if BITS == 8:
+            q = b.to(tl.float32)
+        else:
+            q = tl.interleave((b & 15).to(tl.float32), (b >> 4).to(tl.float32))
+        xv = tl.load(xb + it * KB + tl.arange(0, KB)).to(tl.float32)
+        t = tl.sum(tl.reshape(q * xv[None, :], (BLOCK_N, GPS, GROUP)), axis=2)
+        xs = tl.sum(tl.reshape(xv, (GPS, GROUP)), axis=1)
+        code = tl.load(sbb + it * GPS, mask=ok[:, None], other=0).to(tl.int32)
+        acc += t * (code & 15).to(tl.float32)
+        accm += (code >> 4).to(tl.float32) * xs[None, :]
+    d = tl.load(d_ptr + slot * stride_d_slot + rows, mask=ok, other=0).to(tl.float32)
+    dm = tl.load(dm_ptr + slot * stride_d_slot + rows, mask=ok, other=0).to(tl.float32)
+    out = d * tl.sum(acc, axis=1) - dm * tl.sum(accm, axis=1)
+    tl.atomic_add(y_ptr + pid_p * stride_y + rows, out, mask=ok)
+
+
+_BKEY = ["N", "K", "BITS", "GROUP", "P_BUCKET", "MODE"]
+_grouped_gemv_bytes = triton.autotune(configs=_bconfigs(False), key=_BKEY, restore_value=["y_ptr"],
+                                      prune_configs_by={"early_config_prune": _bprune})(_gemv_bytes)
+_grouped_gemv_bytes_host = triton.autotune(configs=_bconfigs(True), key=_BKEY, restore_value=["y_ptr"],
+                                           prune_configs_by={"early_config_prune": _bprune})(_gemv_bytes)
+BYTEWISE = os.environ.get("MOE_TIERING_BYTEWISE_GEMV", "1") != "0"
+
+
+def _bytes_fit(k: int, bits: int, group: int) -> bool:
+    """moe_tiering.gemv1.bytes_fit (kept here: kernels does not import gemv1)."""
+    if bits not in (4, 8):
+        return False
+    per = 32 // bits
+    return any(k % (w * per) == 0 and (w * per) % group == 0 for w in (8, 16, 32, 64))
+
+
 def grouped_gemv(x: torch.Tensor, token: torch.Tensor, slot: torch.Tensor, qweight: torch.Tensor,
                  scale: torch.Tensor, minimum: torch.Tensor | None, bits: int, group: int, *,
                  mode: int = 0, expert: torch.Tensor | None = None, out: torch.Tensor | None = None,
@@ -240,6 +329,14 @@ def grouped_gemv(x: torch.Tensor, token: torch.Tensor, slot: torch.Tensor, qweig
     else:
         raise ValueError(f"unknown weight format {fmt}")
     bucket = 1 << max(0, (n_pairs - 1).bit_length())  # autotune per power-of-two number of pairs
+    if fmt == 1 and config is None and BYTEWISE and _bytes_fit(k, bits, group):
+        qb = qweight if qweight.dtype == torch.uint8 else qweight.view(torch.uint8)
+        kern = _grouped_gemv_bytes_host if qweight.device.type == "cpu" else _grouped_gemv_bytes
+        kern[lambda meta: (n_pairs, triton.cdiv(n, meta["BLOCK_N"]))](
+            x, token, slot, expert if expert is not None else slot, qb, scale, d, dmin, y, n, k, bucket,
+            x.stride(0), qb.stride(0), qb.stride(1), scale.stride(0), scale.stride(1), d.stride(0), y.stride(0),
+            BITS=bits, GROUP=group, MODE=mode)
+        return y
     exp = expert if expert is not None else slot
     args = (x, token, slot, exp, qw32, scale, mn, dd, dm, y,
             n, k, bucket,

@@ -157,6 +157,28 @@ class Prefetcher:
         return self._views[layout]
 
 
+def _combine_eager(y, weights, t: int, k: int, dtype):
+    """sum over a token's k pairs of weight x expert output, float32, cast to the activation dtype."""
+    return (y.view(t, k, -1) * weights.view(t, k, 1).float()).sum(1).to(dtype)
+
+
+_combine_compiled = None
+
+
+def _combine(y, weights, t, k, dtype):
+    """_combine_eager as one fused kernel at decode (torch.compile; three kernels otherwise), eager when compiling
+    is off (MOE_TIERING_COMPILE=0) or fails."""
+    global _combine_compiled
+    if os.environ.get("MOE_TIERING_COMPILE", "1") == "0" or not y.is_cuda:
+        return _combine_eager(y, weights, t, k, dtype)
+    if _combine_compiled is None:
+        try:
+            _combine_compiled = torch.compile(_combine_eager, dynamic=False)
+        except Exception:  # noqa: BLE001
+            _combine_compiled = _combine_eager
+    return _combine_compiled(y, weights, t, k, dtype)
+
+
 class TieredMoE(nn.Module):
     def __init__(self, router: nn.Module, experts: LayerExperts, cache: ExpertCache, top_k: int, staging: Staging,
                  manager: Manager, first: bool, act=F.silu, *, glu=None, gu_bias: torch.Tensor | None = None,
@@ -259,9 +281,16 @@ class TieredMoE(nn.Module):
                             block_m=block_m, mode=mode, in_div=in_div, f32=True,
                             lut32=self.tcq_lut[tcq.parse_pattern(pattern)])
 
+    def _tracking(self) -> bool:
+        """Whether the decode step must record expert use: only a cache with dynamic slots and a running manager
+        reads the counts. A static cache (every slot frozen, or the manager off: every expert resident) skips the
+        record and the hit counter, two to four tiny kernels per layer and token."""
+        return bool(self.manager.enabled) and len(self.cache.frozen) < self.cache.slots
+
     @property
     def stats(self) -> dict:
-        return {"pairs": self.pair_count, "hit": float(self.hit_count), "staged": float(self.staged_count),
+        hit = float(self.hit_count) if self._tracking() else float(self.pair_count)  # static: every pair is a hit
+        return {"pairs": self.pair_count, "hit": hit, "staged": float(self.staged_count),
                 "copied": float(self.copied_count)}
 
     def reset_stats(self) -> None:
@@ -348,24 +377,27 @@ class TieredMoE(nn.Module):
 
         # three weight sources, selected per pair; -1 means "not from this source"
         hot_idx = cache.slot_of[flat]
-        miss = hot_idx < 0
-        neg = self.neg[:n_pairs]
-        rows = flat.to(torch.int32) if self.host_row is None else self.host_row[flat]  # host row of each pair
-        if prefetch and self.prev is not None:
-            torch.cuda.current_stream(x.device).wait_event(self.copy_done)
-            stg = self.staged_of[flat]
-            stg_idx = torch.where(miss, stg, neg)
-            host_idx = torch.where(miss & (stg < 0), rows, neg)
-            sv = self.prefetcher.views_for(cold_l)[self.index % 2]
-        else:
-            stg_idx = None
-            host_idx = torch.where(miss, rows, neg)
         hv, cv = cache.views, ex.cold_views
-        srcs = [(hot_idx, hv, hot_l), (host_idx, cv, cold_l)]
+        stg_idx = None
         if self.host_row is not None and self.n_rows == 0:
-            srcs.pop()  # every expert frozen in VRAM: no host rows, nothing to read from them
-        if stg_idx is not None:
-            srcs.append((stg_idx, sv, cold_l))
+            # every expert frozen in VRAM: no host rows, nothing to read from them (and no miss to resolve)
+            miss = None
+            srcs = [(hot_idx, hv, hot_l)]
+        else:
+            miss = hot_idx < 0
+            neg = self.neg[:n_pairs]
+            rows = flat.to(torch.int32) if self.host_row is None else self.host_row[flat]  # host row of each pair
+            if prefetch and self.prev is not None:
+                torch.cuda.current_stream(x.device).wait_event(self.copy_done)
+                stg = self.staged_of[flat]
+                stg_idx = torch.where(miss, stg, neg)
+                host_idx = torch.where(miss & (stg < 0), rows, neg)
+                sv = self.prefetcher.views_for(cold_l)[self.index % 2]
+            else:
+                host_idx = torch.where(miss, rows, neg)
+            srcs = [(hot_idx, hv, hot_l), (host_idx, cv, cold_l)]
+            if stg_idx is not None:
+                srcs.append((stg_idx, sv, cold_l))
 
         gemv, xin = grouped_gemv, x
         if self.rot is not None:  # trellis: rotated-domain GEMV on float32 x_rot (module docstring)
@@ -380,14 +412,15 @@ class TieredMoE(nn.Module):
         for sel, v, lay in srcs:
             gemv(a, pairs, sel, **lay.gemv_args(v, "dn"), mode=1, out=y)
         y = self._down_bias(y, flat)
-        y = (y.view(t, k, -1) * weights.view(t, k, 1).float()).sum(1)
+        out = _combine(y, weights, t, k, x.dtype)
 
-        cache.record(flat)
-        self.hit_count += (~miss).sum()
-        if stg_idx is not None:
-            self.staged_count += (stg_idx >= 0).sum()
+        if self._tracking() and miss is not None:
+            cache.record(flat)
+            self.hit_count += (~miss).sum()
+            if stg_idx is not None:
+                self.staged_count += (stg_idx >= 0).sum()
         self.pair_count += n_pairs
-        return y.to(x.dtype)
+        return out
 
     def _prefill(self, x, weights, idx):
         if PREFILL_IMPL == "dequant":

@@ -2,7 +2,8 @@
 
     GET  /health, /v1/models
     POST /v1/chat/completions   messages, max_tokens | max_completion_tokens, temperature, top_p, top_k, seed, stop,
-                                stream, tools (passed to the chat template; tool calls come back as text)
+                                stream, tools (passed to the chat template; tool calls come back as text),
+                                chat_template_kwargs (e.g. {"enable_thinking": false}, as vLLM / llama-server take it)
     POST /v1/completions        prompt (a string), same sampling fields
 
 One generation at a time (Engine's lock); other requests wait. Streaming uses server-sent events in OpenAI's chunk
@@ -70,7 +71,8 @@ def make_handler(engine, name: str, defaults: dict):
                 if not isinstance(body.get("messages"), list) or not body["messages"]:
                     return self._error(400, "messages: a non-empty list is required")
                 try:
-                    ids = engine.encode_chat(body["messages"], tools=body.get("tools"))
+                    ids = engine.encode_chat(body["messages"], tools=body.get("tools"),
+                                             template_kwargs=body.get("chat_template_kwargs"))
                 except Exception as e:  # noqa: BLE001 - the chat template rejected the conversation
                     return self._error(400, f"chat template: {e}")
                 return self._run(body, ids, chat=True)

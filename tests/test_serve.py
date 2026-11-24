@@ -28,7 +28,7 @@ class ByteTok:
     def decode(self, ids, skip_special_tokens=True):
         return bytes(i for i in ids if i < 256).decode("utf-8", errors="replace")
 
-    def apply_chat_template(self, messages, tools=None, add_generation_prompt=True, tokenize=True):
+    def apply_chat_template(self, messages, tools=None, add_generation_prompt=True, tokenize=True, **kw):
         s = "".join(f"<{m['role']}>{m['content']}\n" for m in messages) + "<assistant>"
         return list(s.encode())
 

@@ -67,9 +67,10 @@ class ArchEntry:
     deny_quant    regexes (re.search on the module name) of dense nn.Linear modules this architecture keeps in bf16,
                   on top of the generic rules of dense_quant_plan.
     decode        "graph": CUDA-graph decode (Qwen3-MoE, as today); "eager": eager in v0.1, graph capture is a later
-                  step behind an eager==graph test; "eager_only": graph capture refused (sliding-window layers branch
-                  on a Python int, cache_utils 5.19 :535-636; glm5_next's indexer uses data-dependent boolean
-                  indexing, modeling_glm5_next :1007-1009).
+                  step behind an eager==graph test; "eager_only": graph capture refused (glm5_next's indexer captures
+                  through fuse.install_static_indexer, without its data-dependent pool filter). Sliding-window layers capture
+                  through session.static_cache (full-length static layers; transformers' ring buffer branches on a
+                  Python int, cache_utils 5.19 :535-636).
     min_tf        oldest transformers that has the architecture (new models run on hfcompat.PINNED regardless).
     fp32_keys     model-key patterns (transformers' dtype-plan syntax: a regex body, `*` -> `.*`, re.search) that load
                   as float32 on top of the class's own strict-fp32 list (hfcompat.DtypePlan adds them for bf16 / fp16
@@ -119,19 +120,27 @@ ARCHES: dict[str, ArchEntry] = {e.model_type: e for e in (
               # both sizes of the architecture keep the same bf16 set (computed: 28 MB of bf16 on the 122B, about
               # 20 MB more than at 4 bits).
               (r"\.linear_attn\.in_proj_a$", r"\.linear_attn\.in_proj_b$"),
-              "eager", "5.15.0", "Qwen3.6-35B-A3B, Qwen3.5-122B-A10B: GatedDeltaNet + gated attention, shared expert"),
-    ArchEntry("gpt_oss", "causal_lm", (), Probe("router"), (), "eager_only", "5.15.0",
-              "gpt-oss-20b/120b: interleaved clamp/alpha _apply_gate and expert biases (Phase B, WP8); sliding layers"),
-    ArchEntry("gemma4_text", "causal_lm", _LM, Probe("router", "config.top_k_experts"), (), "eager_only", "5.15.0",
-              "Gemma-4-26B-A4B: experts on the decoder layer, router on the residual, dense MLP in every layer"),
-    ArchEntry("glm4_moe_lite", "causal_lm", (), Probe("router"), (), "eager", "5.15.0",
-              "GLM-4.7-Flash: MLA, sigmoid + correction-bias group top-k router, shared expert", sorted_topk=True),
-    ArchEntry("glm_moe_dsa", "causal_lm", (), Probe("router"), (), "eager", "5.15.0",
-              "GLM-5.3: MLA + DSA indexer (IndexShare); run on 5.19, which caches the MLA latent", sorted_topk=True),
+              "graph", "5.15.0", "Qwen3.6-35B-A3B, Qwen3.5-122B-A10B: GatedDeltaNet + gated attention, shared expert "
+              "(R8: graph == eager 511/511 steps; agents/speed/mode_check.py, Qwen3.6 H4: graph vs eager KL 0.0003 "
+              "over 48 teacher-forced steps of natural text, top-1 100%)"),
+    ArchEntry("gpt_oss", "causal_lm", (), Probe("router"), (), "graph", "5.15.0",
+              "gpt-oss-20b/120b: interleaved clamp/alpha _apply_gate and expert biases (Phase B, WP8); sliding layers "
+              "as full-length static layers (session.static_cache; mode_check, gpt-oss-120b TQ2.57, 368-token prompt "
+              "past the 128 window: graph + speedups vs eager KL 0.0053, plain graph 0.0088)"),
+    ArchEntry("gemma4_text", "causal_lm", _LM, Probe("router", "config.top_k_experts"), (), "graph", "5.15.0",
+              "Gemma-4-26B-A4B: experts on the decoder layer, router on the residual, dense MLP in every layer; sliding "
+              "layers as full-length static layers (session.static_cache; mode_check, H4, 1113-token prompt past the "
+              "1024 window: graph + speedups vs eager KL 0.0010, top-1 47/48)"),
+    ArchEntry("glm4_moe_lite", "causal_lm", (), Probe("router"), (), "graph", "5.15.0",
+              "GLM-4.7-Flash: MLA, sigmoid + correction-bias group top-k router, shared expert (R8: graph exact)",
+              sorted_topk=True),
+    ArchEntry("glm_moe_dsa", "causal_lm", (), Probe("router"), (), "graph", "5.15.0",
+              "GLM-5.3: MLA + DSA indexer (IndexShare); run on 5.19, which caches the MLA latent (R8: graph == eager "
+              "513/513 steps; GRAPH_MIN_TF keeps 5.19)", sorted_topk=True),
     ArchEntry("deepseek_v32", "causal_lm", (), Probe("router"), (), "eager", "5.15.0",
               "DeepSeek-V3.2: MLA + DSA indexer; run on 5.19, which caches the MLA latent", sorted_topk=True),
-    ArchEntry("minimax_m2", "causal_lm", (), Probe("router_bias"), (), "eager", "5.15.0",
-              "MiniMax-M2: sigmoid router with the correction bias on the MoE block",
+    ArchEntry("minimax_m2", "causal_lm", (), Probe("router_bias"), (), "graph", "5.15.0",
+              "MiniMax-M2: sigmoid router with the correction bias on the MoE block (R8: graph == eager 512/512)",
               # the release stores both F32 (and lists them in modules_to_not_convert); the class has no strict-fp32
               # list, so a plain bf16 load would round them. Full depth, 4 x 512 tokens: F32 vs bf16 router moves
               # the logits by KL 0.0203 (top-1 0.936) against a bit-identical run-to-run floor (verify_wp6
@@ -142,8 +151,10 @@ ARCHES: dict[str, ArchEntry] = {e.model_type: e for e in (
               # Qwen3.5's in_proj_b / in_proj_a. The output gate (g_a/g_b) is quantized like Qwen3.5's in_proj_z.
               # Computed cost: 125 MB of bf16 over the 34 KDA layers, about 90 MB more than at 4 bits.
               (r"\.self_attn\.b_proj$", r"\.forget_gate\.f_a_proj$", r"\.forget_gate\.f_b_proj$"),
-              "eager_only", "5.19.0",
-              "GLM-5.3-Flash: mHC streams, KDA + indexed MLA, clamp-10 _apply_gate (Phase B, WP8); no CausalLM",
+              "graph", "5.19.0",
+              "GLM-5.3-Flash: mHC streams, KDA + indexed MLA, clamp-10 _apply_gate (Phase B, WP8); no CausalLM; graph "
+              "decode with fuse.install_static_indexer (mode_check, TQ2.26, 2613-token prompt past index_topk 2048: "
+              "graph + speedups vs eager KL 0.0087, top-1 46/48; 2.47 -> 6.04 tok/s at 58 GB)",
               # mHC base / scale: stored F32 (hc_attn_* / hc_ffn_*); bf16 vs F32 moves full-depth logits (4 x 512
               # tokens) by KL 0.0359 (top-1 0.906) against a bit-identical floor with the stable top-k (WP6 fix
               # depth_cast). The mixing weights (fn) are stored BF16 and stay bf16. conv1d keeps the class's strict

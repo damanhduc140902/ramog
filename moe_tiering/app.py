@@ -84,16 +84,24 @@ class Usage:
 
 
 class Engine:
-    def __init__(self, model, info: dict, cfg, tok, tdir: Path, name: str, ctx: int, mode: str | None = None):
+    def __init__(self, model, info: dict, cfg, tok, tdir: Path, name: str, ctx: int, mode: str | None = None,
+                 warm: bool = True):
         from .generate import Generator
 
         self.model, self.info, self.cfg, self.tok, self.name, self.ctx = model, info, cfg, tok, name, ctx
         self.stop_ids = stop_ids_of(tok, tdir)
         self.gen = Generator(model, info, ctx, mode=mode)
         self.lock = threading.Lock()
+        if warm:  # kernel autotuning, compiling and the graph capture happen here, not in the first answer
+            from . import tunecache
 
-    def encode_chat(self, messages: list[dict], tools=None) -> list[int]:
-        ids = self.tok.apply_chat_template(messages, tools=tools, add_generation_prompt=True, tokenize=True)
+            ids = self.encode_text("Hello") or [0]
+            self.gen.generate(ids, 4, stop_ids=())
+            tunecache.save()
+
+    def encode_chat(self, messages: list[dict], tools=None, template_kwargs: dict | None = None) -> list[int]:
+        ids = self.tok.apply_chat_template(messages, tools=tools, add_generation_prompt=True, tokenize=True,
+                                           **(template_kwargs or {}))
         if hasattr(ids, "keys"):
             ids = ids["input_ids"]
         return list(ids)
@@ -147,30 +155,79 @@ class Engine:
         return self.complete(self.encode_chat(messages, tools=tools), max_new_tokens, **kw)
 
 
+def host_link_gbps(device="cuda:0", mb: int = 256) -> float | None:
+    """Pinned host -> GPU copy bandwidth in GB/s (the speed estimate's host link); MOE_TIERING_HOST_GBPS overrides."""
+    env = os.environ.get("MOE_TIERING_HOST_GBPS")
+    if env:
+        return float(env)
+    try:
+        import time
+
+        src = torch.empty(mb << 20, dtype=torch.uint8).pin_memory()
+        dst = torch.empty(src.numel(), dtype=torch.uint8, device=device)
+        dst.copy_(src, non_blocking=True)
+        torch.cuda.synchronize(device)
+        t0 = time.perf_counter()
+        for _ in range(3):
+            dst.copy_(src, non_blocking=True)
+        torch.cuda.synchronize(device)
+        bw = 3 * src.numel() / (time.perf_counter() - t0) / 1e9
+        del src, dst
+        return round(bw, 1)
+    except Exception:  # noqa: BLE001 - the estimate falls back to a default link
+        return None
+
+
 def plan(path, vram_gb: float | None = None, ram_gb: float | None = None, variant: str = "auto",
-         device="cuda:0", log=print):
-    """The auto-config choice for this machine (no model load). Returns (cfg, stores, vram_gb)."""
+         device="cuda:0", log=print, prefer: str = "balanced"):
+    """The auto-config choice for this machine (no model load). Returns (cfg, stores, vram_gb). prefer: balanced
+    (the most accurate variant within 1 / 0.6 of the fastest estimate), quality (the rule alone) or speed."""
     from . import autoconfig
 
     stores = find_stores(path)
     if vram_gb is None:
         vram_gb = gpu_free_gib(device)
-    cfg = autoconfig.plan([str(s) for s in stores], vram_gb, ram_gb, variant=variant, log=log)
+    cfg = autoconfig.plan([str(s) for s in stores], vram_gb, ram_gb, variant=variant, log=log, prefer=prefer,
+                          host_gbps=host_link_gbps(device))
     return cfg, stores, vram_gb
 
 
+def speedups(model, log=print, mode: str | None = None, entry=None) -> dict:
+    """The decode-step speedups of moe_tiering.fuse: one-token attention, fused routers, per-layer torch.compile. Compiling
+    needs graph decode (a static cache: fixed shapes); an eager session's cache grows every token, which would
+    recompile every step. A failure leaves the model as it was; returns what was applied."""
+    from . import fuse, session
+
+    out = {}
+    if mode is None:
+        mode = session.default_mode(entry) if entry is not None else "eager"
+    try:
+        out["mla_kv_bf16"] = fuse.dequant_mla_kv(model)
+        out["decode_attention"] = fuse.install_decode_attention() or True
+        out["mla_absorbed"] = fuse.install_mla_absorb(model) if os.environ.get("MOE_TIERING_MLA_ABSORB", "1") != "0" else 0
+        fuse.install_capture_safe_masks()
+        out["routers_fused"] = fuse.fuse_routers(model)
+        out["small_linears"] = fuse.fuse_small_linears(model) if mode == "graph" else 0
+        out["layers_compiled"] = fuse.compile_decode(model) if mode == "graph" else 0
+    except Exception as e:  # noqa: BLE001 - speed only: keep the plain path
+        log(f"speedups skipped: {type(e).__name__}: {e}")
+        out["error"] = repr(e)
+    return out
+
+
 def load(path, vram_gb: float | None = None, ram_gb: float | None = None, variant: str = "auto", device="cuda:0",
-         ctx: int = 4096, mode: str | None = None, log=print) -> Engine:
+         ctx: int = 4096, mode: str | None = None, log=print, compile: bool = True, prefer: str = "balanced") -> Engine:
     from transformers import AutoTokenizer
 
     from . import autoconfig
 
-    cfg, stores, vram_gb = plan(path, vram_gb, ram_gb, variant, device, log)
+    cfg, stores, vram_gb = plan(path, vram_gb, ram_gb, variant, device, log, prefer)
     if not cfg.fit:
         raise SystemExit(f"this machine cannot run {path}: {cfg.why}")
     tdir = tokenizer_dir(stores)
     tok = AutoTokenizer.from_pretrained(str(tdir))
     model, info = autoconfig.build(cfg, device, vram_gb, log=log)
+    info["speedups"] = speedups(model, log, mode, info.get("entry")) if compile else {}
     name = Path(path).resolve().name if len(stores) > 1 else stores[0].parent.name
     return Engine(model, info, cfg, tok, tdir, name, ctx, mode)
 

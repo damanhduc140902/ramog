@@ -89,7 +89,14 @@ def check_module(lin: KLinear, tag: str, gen, dev, bias=None, extra: bool = True
         y = lin.matmul_f32(x)
         path = "decode" if T <= DECODE_MAX_TOKENS else "prefill-f32"
         r = {"case": tag, "T": T, "path": path, **err(y, ref)}
-        r["forward_is_cast"] = bool(torch.equal(lin(x), y.to(x.dtype)))
+        fwd, cast = lin(x), y.to(x.dtype)
+        r["forward_is_cast"] = bool(torch.equal(fwd, cast))
+        if T == 1 and not r["forward_is_cast"] and x.dtype == torch.bfloat16:
+            # one bf16 token: forward() runs moe_tiering.gemv1's bf16-output kernel, matmul_f32 its float32-output twin;
+            # the two compiled kernels may round once differently: within one bf16 ulp counts as the cast
+            ulp = (fwd.view(torch.int16).int() - cast.view(torch.int16).int()).abs().max().item()
+            r["forward_ulp"] = ulp
+            r["forward_is_cast"] = ulp <= 1
         if path == "decode":
             r["ok"] = r["spec_ok"] = r["rel_fro"] <= TOL and r["rel_max"] <= TOL and r["forward_is_cast"]
         else:

@@ -107,8 +107,9 @@ def _check_weights(qweight: torch.Tensor, scale: torch.Tensor, pattern):
 def default_gemv_config() -> dict:
     """Launch shape of the decode kernels when none is given: a fixed rule per GPU vendor (never tuned at run
     time, so VRAM and host launches of one shape use the same arithmetic). Measured best on MI250 (RT 1) and on a
-    GTX 1650 (RT 2) for Qwen3-30B's shapes (tools/bench_tcq.py, results/qint/qw1/)."""
-    return {"RT": 1 if torch.version.hip else 2, "CT": 16, "num_warps": 4}
+    GTX 1650 (RT 2) for Qwen3-30B's shapes (tools/bench_tcq.py, results/qint/qw1/); 8 warps on MI250 since the decode
+    step's other kernels were fused (agents/speed/tcq_sweep.py: gate_up 50.3 -> 46.3 us, down 28.0 -> 26.8 us)."""
+    return {"RT": 1 if torch.version.hip else 2, "CT": 16, "num_warps": 8 if torch.version.hip else 4}
 
 
 def _cfg(config):

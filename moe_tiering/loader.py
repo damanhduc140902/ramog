@@ -652,7 +652,7 @@ def _to_host(q: nn.Module) -> None:
 
 def build_engine(store, device="cuda:0", vram_gb: float = 24.0, dense_bits: int = 4, hot_from_cold: bool = False,
                  embed_host: bool = False, head_host: bool = False, *, dense_format: str = "rtn",
-                 dense_q: str | None = None, frozen=None, log=print):
+                 dense_q: str | None = None, frozen=None, slots: int | None = None, log=print):
     """Build the engine from a converted store (see the module docstring). Returns (model, info); info carries
     slots, num_experts, layers, manager, prefetcher (shared by every site since WP8), cold/hot nbytes, device, entry,
     sites (layer, name, router, top_k) and the dense part's facts (load_dense). dense_q: the store's packed dense
@@ -661,7 +661,9 @@ def build_engine(store, device="cuda:0", vram_gb: float = 24.0, dense_bits: int 
     layouts built; it runs hot from cold only (WP15: rotated-domain kernels, moe_tiering.moe).
     frozen (design-quality WP12, the split; module docstring): None (today's full host load), an int F (the F most
     routed experts per layer by counts.safetensors) or {layer: [expert ids]}; needs hot_from_cold. info then also
-    carries "placement" ("split" or "resident-vram"), "frozen" and "vram_load"."""
+    carries "placement" ("split" or "resident-vram"), "frozen" and "vram_load". slots: at most this many cache slots
+    per layer (the auto-config rule's count; its dense estimate counts what the speedups add after the build, e.g.
+    the bf16 kv_b_proj, so the budget's own sizing can give one more slot, which would make a static split dynamic)."""
     from . import hostmem
 
     t0 = time.time()
@@ -708,7 +710,8 @@ def build_engine(store, device="cuda:0", vram_gb: float = 24.0, dense_bits: int 
     torch.cuda.empty_cache()
     torch.cuda.set_per_process_memory_fraction(min(1.0, vram_gb * GiB / total), dev)
     biases = {s.layer_idx: read_biases(sm, s) for s in sites if s.layout.bias}
-    model, info = attach(model, sites, layers, dev, vram_gb, hot_l, cold_l, entry, log, biases=biases, frozen=fz)
+    model, info = attach(model, sites, layers, dev, vram_gb, hot_l, cold_l, entry, log, biases=biases, frozen=fz,
+                         max_slots=slots)
     if fz:
         info.update(load_frozen(sm, sites, layers, info, fz, log))
     info.update(dm.info)
@@ -833,7 +836,7 @@ def read_biases(sm: StoreMeta, site) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def attach(model: nn.Module, sites: list, layers: dict, dev, vram_gb: float, hot_l, cold_l, entry, log=print, *,
-           biases: dict | None = None, frozen: dict | None = None):
+           biases: dict | None = None, frozen: dict | None = None, max_slots: int | None = None):
     """build._attach over the site list: size the VRAM caches to what the budget leaves after the dense part, then
     put a TieredExperts on every site (same formula, same Manager / Staging / Prefetcher wiring). biases: {layer:
     (gate_up_proj_bias, down_proj_bias)} for experts with biases (read_biases).
@@ -861,6 +864,8 @@ def attach(model: nn.Module, sites: list, layers: dict, dev, vram_gb: float, hot
     cold_ls, hot_ls = [le.cold_layout for le in lays], [le.hot_layout for le in lays]
     sz = cache_slots(vram_gb, dense, [la.nbytes for la in hot_ls], [la.nbytes for la in cold_ls])
     staging, slots = sz["staging"], sz["slots"]
+    if max_slots is not None and slots > max_slots:
+        slots = max_slots
     big = max(cold_ls, key=lambda la: la.nbytes)  # the first largest: the shared layout when there is one
     mixed = len({repr(la) for la in cold_ls}) > 1 or len({repr(la) for la in hot_ls}) > 1
     n_exp = lays[0].num_experts
@@ -987,7 +992,8 @@ def load_frozen(sm: StoreMeta, sites: list, layers: dict, info: dict, frozen: di
 
             release_fp_buffers()
     every = all(len(frozen.get(s.layer_idx) or []) == E for s in sites)
-    if every:
+    static = all(len(frozen.get(s.layer_idx) or []) >= c.slots for s, c in zip(sites, caches, strict=True))
+    if every or static:  # no dynamic slot anywhere: the manager and the prefetcher have nothing to do
         info["manager"].enabled = False
         if info.get("prefetcher") is not None:
             info["prefetcher"].enabled = False

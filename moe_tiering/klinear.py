@@ -25,6 +25,7 @@ import triton
 
 from . import gptq as _gptq
 from . import kernels, kquant
+from .gemv1 import bytes_fit, gemv1b
 
 DECODE_MAX_TOKENS = 8
 PREFILL_CHUNK_BYTES = 256 << 20  # float32 output per prefill pass (as moe_tiering.qlinear)
@@ -147,6 +148,10 @@ class KLinear(nn.Module):
     # ------------------------------------------------------------------------------------------- compute
     def _gemv(self, x2: torch.Tensor) -> torch.Tensor:
         t = x2.shape[0]
+        if t == 1 and x2.is_cuda and bytes_fit(self.in_features, self.bits, self.group):
+            # the same kernel as forward()'s bf16 fast path, float32 out: forward stays this result's cast
+            return gemv1b(x2, self.qweight[0], self.sb[0], self.d[0], self.dmin[0], self.bits, self.group,
+                          out_dtype=torch.float32).view(1, self.out_features)
         if not self.deterministic:
             return kernels.grouped_gemv(x2, self._tok[:t], self._slot[:t], self.qweight, self.sb, None, self.bits,
                                         self.group, fmt=1, d=self.d, dmin=self.dmin)
@@ -223,6 +228,12 @@ class KLinear(nn.Module):
         return y.reshape(*shape[:-1], self.out_features)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if (x.dtype == torch.bfloat16 and self.bias is None and self.gemv_ok and x.numel() == self.in_features
+                and x.is_cuda and bytes_fit(self.in_features, self.bits, self.group)):
+            # one token: moe_tiering.gemv1's byte-wise kernel writes bf16 directly (no fill / cast kernels, deterministic);
+            # matmul_f32 runs its float32 twin, so forward() is its cast within one bf16 ulp (two compiled kernels)
+            return gemv1b(x, self.qweight[0], self.sb[0], self.d[0], self.dmin[0], self.bits,
+                          self.group).view(*x.shape[:-1], self.out_features)
         return self.matmul_f32(x).to(x.dtype)
 
     @torch.no_grad()

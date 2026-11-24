@@ -9,8 +9,8 @@ the decode step independent of how a cache reports its length):
   replays (manager.external is True). Capture happens after cache.reset() plus one eager step, so a linear-attention
   model records its recurrent branch (cache_utils 5.19 :996-1003 reset() clears has_previous_state; qwen3_5_moe picks
   its branch on it). The entry defaults to the model's own (resolve_entry: arch.arch_for(model.config)), so the
-  refusal holds for the v0.1 signatures too. graph_ok(entry) refuses the eager_only architectures (gpt_oss, gemma4_text: sliding-window
-  layers branch on a Python int; glm5_next_text: data-dependent indexer) and, below transformers 5.19, glm_moe_dsa
+  refusal holds for the v0.1 signatures too. graph_ok(entry) refuses the eager_only architectures (deepseek_v41_text; sliding-window
+  layers and glm5_next's indexer capture through static_cache) and, below transformers 5.19, glm_moe_dsa
   and deepseek_v32 (GRAPH_MIN_TF); the default mode is graph only for qwen3_moe (arch.ArchEntry.decode == "graph");
   the others need an eager == graph test first (first_run R8).
 
@@ -33,6 +33,27 @@ from . import arch, hfcompat, tunecache
 # plain transformers, StaticCache vs DynamicCache decode: rel 1.079 / 1.094 on 5.15, 0.003 / 0.0 on 5.19
 # (results/coregen/verify_wp4/adv/diag_dsa_static.*, WP4 verification minor issue 1).
 GRAPH_MIN_TF = {"glm_moe_dsa": "5.19.0", "deepseek_v32": "5.19.0"}
+
+
+def static_cache(config, max_len: int):
+    """transformers' StaticCache with every sliding-window layer replaced by a full-length StaticLayer. The sliding
+    layer (cache_utils 5.19 StaticSlidingWindowLayer) is a ring buffer that branches on a Python int
+    (cumulative_length_int: is_full, get_mask_sizes' kv_offset), which a captured graph freezes at its capture value;
+    a StaticLayer writes at its tensor cumulative_length and reports (max_len, 0) mask sizes, and the model's
+    sliding-window mask (masking_utils sliding_window_overlay: kv_idx > q_idx - window) then keeps exactly the window
+    the ring buffer kept. Costs ctx instead of window positions of KV for those layers."""
+    from transformers import StaticCache
+    from transformers.cache_utils import StaticLayer, StaticSlidingWindowLayer
+
+    from .fuse import install_capture_safe_masks, install_static_indexer
+
+    install_capture_safe_masks()  # eager attention (gpt-oss sinks, Gemma-4) builds its mask with a host tensor
+    install_static_indexer()  # glm5_next: the indexer's pool filter has a data-dependent shape
+    cache = StaticCache(config=config, max_cache_len=max_len)
+    for i, layer in enumerate(cache.layers):
+        if isinstance(layer, StaticSlidingWindowLayer):
+            cache.layers[i] = StaticLayer(max_cache_len=max_len)
+    return cache
 
 
 def graph_refusal(entry: arch.ArchEntry) -> str | None:
@@ -109,9 +130,7 @@ class TeacherForced:
         self.pos = torch.zeros(1, 1, dtype=torch.long, device=self.dev)
         self.cache = None
         if self.mode == "graph":
-            from transformers import StaticCache
-
-            self.cache = StaticCache(config=model.config, max_cache_len=max_len)
+            self.cache = static_cache(model.config, max_len)
         self.graph = None
         self.logits = None
 
@@ -195,9 +214,7 @@ class GreedyDecoder:
         self.max_len = max_len
         self.cache = None
         if self.mode == "graph":
-            from transformers import StaticCache
-
-            self.cache = StaticCache(config=model.config, max_cache_len=max_len)
+            self.cache = static_cache(model.config, max_len)
         self.ids = torch.zeros(1, 1, dtype=torch.long, device=self.dev)
         self.next_id = torch.zeros(1, 1, dtype=torch.long, device=self.dev)
         self.pos = torch.zeros(1, 1, dtype=torch.long, device=self.dev)
